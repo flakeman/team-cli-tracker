@@ -112,6 +112,7 @@ go run ./cmd/node trust revoke --node-id node-2
 - SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`
 - SDD consensus-критичных мутаций: `docs/SDD-04-consensus-critical-mutations.md`
 - SDD board UX, 3-VPS smoke и release baseline: `docs/SDD-05-board-smoke-and-release.md`
+- SDD сквозного логирования и выгрузки аудита: `docs/SDD-06-end-to-end-audit-logging-and-export.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
@@ -244,6 +245,7 @@ go run ./cmd/node trust revoke --node-id node-2
 - Security and team lifecycle SDD: `docs/SDD-03-security-and-team-lifecycle.md`
 - Consensus-critical mutations SDD: `docs/SDD-04-consensus-critical-mutations.md`
 - Board UX, 3-VPS smoke, and release baseline SDD: `docs/SDD-05-board-smoke-and-release.md`
+- End-to-end audit logging and export SDD: `docs/SDD-06-end-to-end-audit-logging-and-export.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
