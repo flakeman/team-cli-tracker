@@ -76,6 +76,7 @@ go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS -format 
 
 ### Документация
 - Спецификация архитектуры: `docs/SDD-01-decentralized-kanban.md`
+- SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`
 - Дорожная карта: `docs/ROADMAP.md`
 - Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Скрипты деплоя: `deploy/README.md`
@@ -165,6 +166,7 @@ go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS -format 
 
 ### Docs
 - Architecture spec: `docs/SDD-01-decentralized-kanban.md`
+- Near-term execution SDD: `docs/SDD-02-near-term-execution-plan.md`
 - Delivery roadmap: `docs/ROADMAP.md`
 - 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Deploy scripts: `deploy/README.md`
