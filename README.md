@@ -36,6 +36,7 @@ go run ./cmd/node
 - Architecture spec: `docs/SDD-01-decentralized-kanban.md`
 - Delivery roadmap: `docs/ROADMAP.md`
 - 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
+- Deploy scripts: `deploy/README.md`
 
 ## Near-Term Plan
 1. Node identity and signed event append.
