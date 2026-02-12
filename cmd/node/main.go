@@ -15,10 +15,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/vladimir/team-cli-tracker/internal/audit"
 	"github.com/vladimir/team-cli-tracker/internal/events"
+	"github.com/vladimir/team-cli-tracker/internal/governance"
 	"github.com/vladimir/team-cli-tracker/internal/node"
 	"github.com/vladimir/team-cli-tracker/internal/store"
 	"github.com/vladimir/team-cli-tracker/internal/team"
@@ -406,6 +409,7 @@ func runServe(args []string) {
 	mtlsRequired := fs.Bool("mtls-required", envOr("MTLS_REQUIRED", "false") == "true", "require and verify client cert")
 	clientCert := fs.String("client-cert", envOr("CLIENT_TLS_CERT_FILE", ""), "client cert for outgoing peer requests")
 	clientKey := fs.String("client-key", envOr("CLIENT_TLS_KEY_FILE", ""), "client key for outgoing peer requests")
+	rateLimitPerMin := fs.Int("rate-limit-per-min", mustAtoi(envOr("RATE_LIMIT_PER_MIN", "120")), "per-token or per-ip requests per minute")
 	tick := fs.Duration("sync-tick", 3*time.Second, "sync interval")
 	_ = fs.Parse(args)
 
@@ -441,6 +445,17 @@ func runServe(args []string) {
 	if err != nil {
 		fatal(err)
 	}
+	govManager, err := governance.Open(*dataDir)
+	if err != nil {
+		fatal(err)
+	}
+	if err := govManager.SetNodeRole(id.NodeID, "voting", true); err != nil {
+		fatal(err)
+	}
+	auditManager, err := audit.Open(*dataDir)
+	if err != nil {
+		fatal(err)
+	}
 	s := &syncServer{
 		projectID:       *projectID,
 		nodeID:          id.NodeID,
@@ -455,6 +470,9 @@ func runServe(args []string) {
 		trustManager:    trustManager,
 		teamManager:     teamManager,
 		identity:        id,
+		govManager:      govManager,
+		auditManager:    auditManager,
+		rateLimiter:     newSimpleRateLimiter(*rateLimitPerMin),
 	}
 
 	mux := http.NewServeMux()
@@ -473,6 +491,9 @@ func runServe(args []string) {
 	mux.HandleFunc("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
 	mux.HandleFunc("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
 	mux.HandleFunc("/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
+	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
+	mux.HandleFunc("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -505,6 +526,9 @@ type syncServer struct {
 	trustManager    *trust.Manager
 	teamManager     *team.Manager
 	identity        node.Identity
+	govManager      *governance.Manager
+	auditManager    *audit.Manager
+	rateLimiter     *simpleRateLimiter
 }
 
 type transitionRequest struct {
@@ -608,6 +632,7 @@ func (s *syncServer) trustInvite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.auditManager.Append("trust.invite", s.actorFromReq(r), "ok", map[string]any{"node_id": in.NodeID})
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expires_at": exp.UTC().Format(time.RFC3339), "node_id": in.NodeID})
 }
 
@@ -628,6 +653,7 @@ func (s *syncServer) trustJoin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.auditManager.Append("trust.join", in.NodeID, "ok", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "trusted", "node_id": strings.TrimSpace(in.NodeID)})
 }
 
@@ -647,6 +673,7 @@ func (s *syncServer) trustRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.auditManager.Append("trust.revoke", s.actorFromReq(r), "ok", map[string]any{"node_id": in.NodeID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "node_id": strings.TrimSpace(in.NodeID)})
 }
 
@@ -679,6 +706,7 @@ func (s *syncServer) teamOnboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.auditManager.Append("team.onboard", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "role": in.Role})
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "onboarded", "user_id": in.UserID, "role": in.Role, "duty": in.Duty})
 }
 
@@ -700,6 +728,7 @@ func (s *syncServer) teamRoleChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.auditManager.Append("team.role_change", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "role": in.Role, "duty": in.Duty})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "role_changed", "user_id": in.UserID, "role": in.Role, "duty": in.Duty})
 }
 
@@ -724,6 +753,7 @@ func (s *syncServer) teamOffboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.auditManager.Append("team.offboard", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "reassigned": cnt})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "offboarded", "user_id": in.UserID, "reassigned_issues": cnt})
 }
 
@@ -733,6 +763,61 @@ func (s *syncServer) teamList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"members": s.teamManager.List()})
+}
+
+func (s *syncServer) governanceNodeRole(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		NodeID string `json:"node_id"`
+		Role   string `json:"role"`
+		Active bool   `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.govManager.SetNodeRole(strings.TrimSpace(in.NodeID), strings.TrimSpace(in.Role), in.Active); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.auditManager.Append("governance.node_role", s.actorFromReq(r), "ok", map[string]any{"node_id": in.NodeID, "role": in.Role, "active": in.Active})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "updated"})
+}
+
+func (s *syncServer) governanceList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	nodes := s.govManager.List()
+	voting := s.govManager.VotingCount()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes":        nodes,
+		"voting_count": voting,
+		"quorum":       quorumNeeded(voting),
+	})
+}
+
+func (s *syncServer) securityAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 500 {
+			limit = v
+		}
+	}
+	items, err := s.auditManager.ReadTail(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": items})
 }
 
 func (s *syncServer) raftVoteTransition(w http.ResponseWriter, r *http.Request) {
@@ -1109,6 +1194,7 @@ func printUsage() {
 	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
 	fmt.Println("  node team offboard --project-id OPS --user-id u1")
 	fmt.Println("  node team list")
+	fmt.Println("  node serve ... [--rate-limit-per-min 120]")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 
@@ -1366,11 +1452,24 @@ func reassignFromEvents(logDB *store.EventLog, id node.Identity, tm *team.Manage
 
 func (s *syncServer) withAuthAny(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.rateLimiter != nil {
+			key := s.rateLimitKey(r)
+			if !s.rateLimiter.Allow(key) {
+				if s.auditManager != nil {
+					s.auditManager.Append("rate_limit", key, "deny", nil)
+				}
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+				return
+			}
+		}
 		if !s.authEnabled {
 			next(w, r)
 			return
 		}
 		if _, ok := s.authenticate(r); !ok {
+			if s.auditManager != nil {
+				s.auditManager.Append("authn", s.actorFromReq(r), "deny", map[string]any{"path": r.URL.Path})
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -1390,10 +1489,16 @@ func (s *syncServer) withAuthRoles(next http.HandlerFunc, roles ...string) http.
 		}
 		p, ok := s.authenticate(r)
 		if !ok {
+			if s.auditManager != nil {
+				s.auditManager.Append("authn", s.actorFromReq(r), "deny", map[string]any{"path": r.URL.Path})
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
 		if _, ok := allowed[strings.ToLower(strings.TrimSpace(p.Role))]; !ok {
+			if s.auditManager != nil {
+				s.auditManager.Append("authz", p.UserID, "deny", map[string]any{"path": r.URL.Path, "role": p.Role})
+			}
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 			return
 		}
@@ -1494,4 +1599,55 @@ func (s *syncServer) getHTTPClient() *http.Client {
 		return s.httpClient
 	}
 	return http.DefaultClient
+}
+
+func (s *syncServer) actorFromReq(r *http.Request) string {
+	if p, ok := s.authenticate(r); ok {
+		return p.UserID
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func (s *syncServer) rateLimitKey(r *http.Request) string {
+	if p, ok := s.authenticate(r); ok {
+		return "token:" + p.UserID
+	}
+	return "ip:" + strings.TrimSpace(r.RemoteAddr)
+}
+
+type simpleRateLimiter struct {
+	limit    int
+	mu       sync.Mutex
+	windowAt int64
+	counts   map[string]int
+}
+
+func newSimpleRateLimiter(limit int) *simpleRateLimiter {
+	if limit <= 0 {
+		limit = 120
+	}
+	return &simpleRateLimiter{
+		limit:  limit,
+		counts: map[string]int{},
+	}
+}
+
+func (r *simpleRateLimiter) Allow(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	nowMin := time.Now().Unix() / 60
+	if r.windowAt != nowMin {
+		r.windowAt = nowMin
+		r.counts = map[string]int{}
+	}
+	r.counts[key]++
+	return r.counts[key] <= r.limit
+}
+
+func mustAtoi(s string) int {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 120
+	}
+	return v
 }

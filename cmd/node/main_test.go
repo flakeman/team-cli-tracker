@@ -158,6 +158,39 @@ func TestOffboardingReassignsIssues(t *testing.T) {
 	}
 }
 
+func TestAuthzDenialForProtectedEndpoint(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "s"), "node-s", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"dev-token": {UserID: "dev1", Role: "dev", Active: true},
+	}
+
+	body := []byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer dev-token")
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestMTLSConfigRequiresCA(t *testing.T) {
+	_, err := buildServerTLSConfig("", true)
+	if err == nil {
+		t.Fatalf("expected error when mtls is enabled without CA file")
+	}
+}
+
 type testNodeServer struct {
 	syncServer *syncServer
 	server     *httptest.Server
@@ -180,8 +213,8 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/sync/clock", s.syncClock)
 	mux.HandleFunc("/sync/events", s.syncEvents)
 	mux.HandleFunc("/sync/ingest", s.syncIngest)
-	mux.HandleFunc("/raft/vote-transition", s.raftVoteTransition)
-	mux.HandleFunc("/raft/validate-transition", s.raftValidateTransition)
+	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	ts := httptest.NewServer(mux)
 	out := &testNodeServer{syncServer: s, server: ts, url: ts.URL}
