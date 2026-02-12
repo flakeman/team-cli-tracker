@@ -21,6 +21,7 @@ import (
 	"github.com/vladimir/team-cli-tracker/internal/events"
 	"github.com/vladimir/team-cli-tracker/internal/node"
 	"github.com/vladimir/team-cli-tracker/internal/store"
+	"github.com/vladimir/team-cli-tracker/internal/team"
 	"github.com/vladimir/team-cli-tracker/internal/trust"
 )
 
@@ -40,6 +41,8 @@ func main() {
 		runServe(os.Args[2:])
 	case "storage":
 		runStorage(os.Args[2:])
+	case "team":
+		runTeam(os.Args[2:])
 	case "trust":
 		runTrust(os.Args[2:])
 	default:
@@ -311,6 +314,80 @@ func runTrust(args []string) {
 	}
 }
 
+func runTeam(args []string) {
+	if len(args) < 1 {
+		fmt.Println("team commands: onboard | role-change | offboard | list")
+		return
+	}
+	switch args[0] {
+	case "onboard":
+		fs := flag.NewFlagSet("team onboard", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		userID := fs.String("user-id", "", "user id")
+		role := fs.String("role", "viewer", "role")
+		duty := fs.Bool("duty", false, "duty member")
+		_ = fs.Parse(args[1:])
+		tm, err := team.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := tm.Onboard(team.Member{UserID: *userID, Role: *role, Duty: *duty, Active: true}); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("ok: onboarded user=%s role=%s duty=%v\n", *userID, *role, *duty)
+	case "role-change":
+		fs := flag.NewFlagSet("team role-change", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		userID := fs.String("user-id", "", "user id")
+		role := fs.String("role", "", "new role")
+		duty := fs.Bool("duty", false, "duty member")
+		_ = fs.Parse(args[1:])
+		tm, err := team.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := tm.ChangeRole(*userID, *role, *duty); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("ok: role changed user=%s role=%s duty=%v\n", *userID, *role, *duty)
+	case "offboard":
+		fs := flag.NewFlagSet("team offboard", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		projectID := fs.String("project-id", "", "project id")
+		nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+		userID := fs.String("user-id", "", "user id")
+		_ = fs.Parse(args[1:])
+		if *projectID == "" || *userID == "" {
+			fatal(fmt.Errorf("project-id and user-id are required"))
+		}
+		tm, err := team.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		_, err = tm.Offboard(*userID)
+		if err != nil {
+			fatal(err)
+		}
+		cnt, err := reassignOffboardedUser(*dataDir, *nodeID, *projectID, *userID, tm)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("ok: offboarded user=%s reassigned_issues=%d\n", *userID, cnt)
+	case "list":
+		fs := flag.NewFlagSet("team list", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		tm, err := team.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		raw, _ := json.MarshalIndent(map[string]any{"members": tm.List()}, "", "  ")
+		fmt.Println(string(raw))
+	default:
+		fmt.Println("team commands: onboard | role-change | offboard | list")
+	}
+}
+
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
@@ -360,6 +437,10 @@ func runServe(args []string) {
 	if err := trustManager.TrustNode(id.NodeID); err != nil {
 		fatal(err)
 	}
+	teamManager, err := team.Open(*dataDir)
+	if err != nil {
+		fatal(err)
+	}
 	s := &syncServer{
 		projectID:       *projectID,
 		nodeID:          id.NodeID,
@@ -372,6 +453,8 @@ func runServe(args []string) {
 		httpClient:      httpClient,
 		peerToken:       strings.TrimSpace(*peerToken),
 		trustManager:    trustManager,
+		teamManager:     teamManager,
+		identity:        id,
 	}
 
 	mux := http.NewServeMux()
@@ -386,6 +469,10 @@ func runServe(args []string) {
 	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
 	mux.HandleFunc("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
 	mux.HandleFunc("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
+	mux.HandleFunc("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
+	mux.HandleFunc("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
+	mux.HandleFunc("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
+	mux.HandleFunc("/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -416,6 +503,8 @@ type syncServer struct {
 	httpClient      *http.Client
 	peerToken       string
 	trustManager    *trust.Manager
+	teamManager     *team.Manager
+	identity        node.Identity
 }
 
 type transitionRequest struct {
@@ -567,6 +656,83 @@ func (s *syncServer) trustList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"trusted_nodes": s.trustManager.ListTrusted()})
+}
+
+func (s *syncServer) teamOnboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+		Duty   bool   `json:"duty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.Role == "" {
+		in.Role = "viewer"
+	}
+	if err := s.teamManager.Onboard(team.Member{UserID: in.UserID, Role: in.Role, Duty: in.Duty, Active: true}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "onboarded", "user_id": in.UserID, "role": in.Role, "duty": in.Duty})
+}
+
+func (s *syncServer) teamRoleChange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+		Duty   bool   `json:"duty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.teamManager.ChangeRole(in.UserID, in.Role, in.Duty); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "role_changed", "user_id": in.UserID, "role": in.Role, "duty": in.Duty})
+}
+
+func (s *syncServer) teamOffboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if _, err := s.teamManager.Offboard(in.UserID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	cnt, err := reassignOffboardedUserByServer(s, in.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "offboarded", "user_id": in.UserID, "reassigned_issues": cnt})
+}
+
+func (s *syncServer) teamList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"members": s.teamManager.List()})
 }
 
 func (s *syncServer) raftVoteTransition(w http.ResponseWriter, r *http.Request) {
@@ -864,6 +1030,17 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 			if strings.TrimSpace(p.Text) != "" {
 				it.Comments = append(it.Comments, p.Text)
 			}
+		case "issue.assign", "issue.reassign":
+			var p struct {
+				Assignee string `json:"assignee"`
+				New      string `json:"new_assignee"`
+			}
+			_ = json.Unmarshal(e.Payload, &p)
+			if strings.TrimSpace(p.New) != "" {
+				it.Assignee = strings.TrimSpace(p.New)
+			} else {
+				it.Assignee = strings.TrimSpace(p.Assignee)
+			}
 		}
 		issues[e.EntityID] = it
 	}
@@ -928,6 +1105,10 @@ func printUsage() {
 	fmt.Println("  node trust use-invite --node-id node-x --token <token>")
 	fmt.Println("  node trust revoke --node-id node-x")
 	fmt.Println("  node trust list")
+	fmt.Println("  node team onboard --user-id u1 --role dev [--duty]")
+	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
+	fmt.Println("  node team offboard --project-id OPS --user-id u1")
+	fmt.Println("  node team list")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 
@@ -1100,6 +1281,87 @@ func modeName(preferredLeader string) string {
 		return "normal"
 	}
 	return "admin_preferred"
+}
+
+func reassignOffboardedUser(dataDir, nodeID, projectID, offboardedUser string, tm *team.Manager) (int, error) {
+	id, err := node.LoadOrCreate(dataDir, nodeID)
+	if err != nil {
+		return 0, err
+	}
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		return 0, err
+	}
+	all, err := logDB.ReadAll()
+	if err != nil {
+		return 0, err
+	}
+	return reassignFromEvents(logDB, id, tm, projectID, offboardedUser, all)
+}
+
+func reassignOffboardedUserByServer(s *syncServer, offboardedUser string) (int, error) {
+	all, err := s.log.ReadAll()
+	if err != nil {
+		return 0, err
+	}
+	return reassignFromEvents(s.log, s.identity, s.teamManager, s.projectID, offboardedUser, all)
+}
+
+func reassignFromEvents(logDB *store.EventLog, id node.Identity, tm *team.Manager, projectID, offboardedUser string, all []events.SignedEvent) (int, error) {
+	nextAssignee := tm.ActiveLead()
+	reason := "lead_fallback"
+	if nextAssignee == "" || nextAssignee == offboardedUser {
+		nextAssignee = tm.ActiveDuty()
+		reason = "duty_fallback"
+	}
+	if nextAssignee == offboardedUser {
+		nextAssignee = ""
+	}
+	if nextAssignee == "" {
+		reason = "unassigned_fallback"
+	}
+	board := projectBoardFromEvents(projectID, all)
+	count := 0
+	for col, issues := range board {
+		if col == "done" {
+			continue
+		}
+		for _, it := range issues {
+			if it.Assignee != offboardedUser {
+				continue
+			}
+			payload := map[string]string{
+				"old_assignee": offboardedUser,
+				"new_assignee": nextAssignee,
+				"reason":       reason,
+				"status":       it.Status,
+			}
+			raw, _ := json.Marshal(payload)
+			e := events.SignedEvent{
+				Version:   1,
+				ProjectID: projectID,
+				EntityID:  it.ID,
+				Type:      "issue.reassign",
+				Payload:   raw,
+				SignerID:  id.NodeID,
+				SignerPub: id.Pub,
+				Seq:       logDB.NextSeq(projectID, id.NodeID),
+				Timestamp: time.Now().UTC(),
+			}
+			if len(id.Priv) > 0 {
+				sig, err := events.Sign(id.Priv, e)
+				if err != nil {
+					return count, err
+				}
+				e.Signature = sig
+			}
+			if err := logDB.Append(e); err != nil {
+				return count, err
+			}
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *syncServer) withAuthAny(next http.HandlerFunc) http.HandlerFunc {

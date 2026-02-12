@@ -88,6 +88,16 @@ go run ./cmd/node serve --project-id OPS --listen :4101 \
   --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
   --auth-enabled --auth-tokens-json '{"admin-token":{"user_id":"u1","role":"admin","active":true}}' \
   --peer-token admin-token
+
+# жизненный цикл команды
+go run ./cmd/node team onboard --user-id dev1 --role dev
+go run ./cmd/node team role-change --user-id dev1 --role lead
+go run ./cmd/node team offboard --project-id OPS --user-id dev1
+
+# доверенные ноды
+go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
+go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
+go run ./cmd/node trust revoke --node-id node-2
 ```
 
 ### Документация
@@ -195,6 +205,16 @@ go run ./cmd/node serve --project-id OPS --listen :4101 \
   --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
   --auth-enabled --auth-tokens-json '{"admin-token":{"user_id":"u1","role":"admin","active":true}}' \
   --peer-token admin-token
+
+# team lifecycle
+go run ./cmd/node team onboard --user-id dev1 --role dev
+go run ./cmd/node team role-change --user-id dev1 --role lead
+go run ./cmd/node team offboard --project-id OPS --user-id dev1
+
+# trusted node management
+go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
+go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
+go run ./cmd/node trust revoke --node-id node-2
 ```
 
 ### Docs

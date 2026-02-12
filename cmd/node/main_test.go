@@ -12,6 +12,7 @@ import (
 	"github.com/vladimir/team-cli-tracker/internal/events"
 	"github.com/vladimir/team-cli-tracker/internal/node"
 	"github.com/vladimir/team-cli-tracker/internal/store"
+	"github.com/vladimir/team-cli-tracker/internal/team"
 )
 
 func TestThreeNodeConvergeAfterReconnect(t *testing.T) {
@@ -101,6 +102,59 @@ func TestSyncIngestRejectsInvalidSignatureAndReplay(t *testing.T) {
 	}
 	if code := postIngest(t, srv.url, ev); code != http.StatusConflict {
 		t.Fatalf("replay ingest code=%d want=%d", code, http.StatusConflict)
+	}
+}
+
+func TestOffboardingReassignsIssues(t *testing.T) {
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "node")
+	id, err := node.LoadOrCreate(dataDir, "node-1")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("log open: %v", err)
+	}
+	tm, err := team.Open(dataDir)
+	if err != nil {
+		t.Fatalf("team open: %v", err)
+	}
+	_ = tm.Onboard(team.Member{UserID: "lead1", Role: "lead", Active: true})
+	_ = tm.Onboard(team.Member{UserID: "dev1", Role: "dev", Active: true})
+
+	createPayload := map[string]string{"status": "todo", "summary": "Task", "assignee": "dev1"}
+	raw, _ := json.Marshal(createPayload)
+	e := events.SignedEvent{
+		Version:   1,
+		ProjectID: "OPS",
+		EntityID:  "OPS-500",
+		Type:      "issue.create",
+		Payload:   raw,
+		SignerID:  id.NodeID,
+		SignerPub: id.Pub,
+		Seq:       logDB.NextSeq("OPS", id.NodeID),
+		Timestamp: time.Now().UTC(),
+	}
+	sig, _ := events.Sign(id.Priv, e)
+	e.Signature = sig
+	if err := logDB.Append(e); err != nil {
+		t.Fatalf("append create: %v", err)
+	}
+	if _, err := tm.Offboard("dev1"); err != nil {
+		t.Fatalf("offboard: %v", err)
+	}
+	reassigned, err := reassignOffboardedUser(dataDir, "node-1", "OPS", "dev1", tm)
+	if err != nil {
+		t.Fatalf("reassign: %v", err)
+	}
+	if reassigned != 1 {
+		t.Fatalf("reassigned=%d want=1", reassigned)
+	}
+	all, _ := logDB.ReadAll()
+	board := projectBoardFromEvents("OPS", all)
+	if len(board["todo"]) != 1 || board["todo"][0].Assignee != "lead1" {
+		t.Fatalf("unexpected assignee after reassign: %+v", board["todo"])
 	}
 }
 
