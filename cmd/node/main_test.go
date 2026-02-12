@@ -355,6 +355,38 @@ func TestPaginateAuditEvents(t *testing.T) {
 	}
 }
 
+func TestSecurityAuditExportEndpoint(t *testing.T) {
+	dataDir := t.TempDir()
+	am, err := audit.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open audit: %v", err)
+	}
+	am.Append("team.onboard", "u1", "ok", map[string]any{"user_id": "dev1"})
+	time.Sleep(10 * time.Millisecond)
+	am.Append("team.role_change", "u2", "ok", map[string]any{"role": "lead"})
+
+	s := &syncServer{auditManager: am}
+	req := httptest.NewRequest(http.MethodGet, "/security/audit/export?user=u2&limit=1", nil)
+	w := httptest.NewRecorder()
+	s.securityAuditExport(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Events []audit.Event `json:"events"`
+		Count  int           `json:"count"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Count != 1 || len(out.Events) != 1 {
+		t.Fatalf("unexpected count=%d len=%d", out.Count, len(out.Events))
+	}
+	if out.Events[0].Actor != "u2" {
+		t.Fatalf("unexpected actor=%q", out.Events[0].Actor)
+	}
+}
+
 func TestChaosPartitionRejoinDeterministicConvergence(t *testing.T) {
 	base := t.TempDir()
 	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")

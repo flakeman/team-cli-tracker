@@ -895,6 +895,7 @@ func runServe(args []string) {
 	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
 	mux.HandleFunc("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
+	mux.HandleFunc("/security/audit/export", s.withAuthRoles(s.securityAuditExport, "admin", "lead"))
 	mux.HandleFunc("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
 	mux.HandleFunc("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
 	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
@@ -2065,6 +2066,54 @@ func (s *syncServer) securityAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": items})
+}
+
+func (s *syncServer) securityAuditExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	fromTS, toTS, err := parseAuditTimeRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	users := parseUserFilter(r.URL.Query().Get("user"))
+	limit := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 0 || v > 10000 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
+			return
+		}
+		limit = v
+	}
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	items, err := s.auditManager.ReadAll()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	filtered := filterAuditEvents(items, fromTS, toTS, users)
+	paged, next, err := paginateAuditEvents(filtered, limit, cursor)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.auditManager.Append("audit.export_api", s.actorFromReq(r), "ok", map[string]any{
+		"from":        strings.TrimSpace(r.URL.Query().Get("from")),
+		"to":          strings.TrimSpace(r.URL.Query().Get("to")),
+		"user":        strings.TrimSpace(r.URL.Query().Get("user")),
+		"limit":       limit,
+		"cursor":      cursor,
+		"next_cursor": next,
+		"count":       len(paged),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"events":      paged,
+		"next_cursor": next,
+		"count":       len(paged),
+	})
 }
 
 func (s *syncServer) authIssue(w http.ResponseWriter, r *http.Request) {

@@ -104,6 +104,14 @@ go run ./cmd/node team offboard --project-id OPS --user-id dev1
 go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
 go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
 go run ./cmd/node trust revoke --node-id node-2
+
+# аудит: выгрузка и проверка целостности
+go run ./cmd/node audit export --all --format jsonl
+go run ./cmd/node audit export --from 2026-02-12T00:00:00Z --to 2026-02-12T23:59:59Z --user vova,qa --format csv --limit 100 --cursor 0
+go run ./cmd/node audit verify-integrity
+
+# API выгрузка аудита (admin/lead token)
+curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/export?from=2026-02-12T00:00:00Z&to=2026-02-12T23:59:59Z&user=vova,qa&limit=100&cursor=0"
 ```
 
 ### Документация
@@ -239,6 +247,14 @@ go run ./cmd/node team offboard --project-id OPS --user-id dev1
 go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
 go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
 go run ./cmd/node trust revoke --node-id node-2
+
+# audit export and integrity
+go run ./cmd/node audit export --all --format jsonl
+go run ./cmd/node audit export --from 2026-02-12T00:00:00Z --to 2026-02-12T23:59:59Z --user vova,qa --format csv --limit 100 --cursor 0
+go run ./cmd/node audit verify-integrity
+
+# audit export API (admin/lead token)
+curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/export?from=2026-02-12T00:00:00Z&to=2026-02-12T23:59:59Z&user=vova,qa&limit=100&cursor=0"
 ```
 
 ### Docs
