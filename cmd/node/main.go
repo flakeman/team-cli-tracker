@@ -21,6 +21,7 @@ import (
 	"github.com/vladimir/team-cli-tracker/internal/events"
 	"github.com/vladimir/team-cli-tracker/internal/node"
 	"github.com/vladimir/team-cli-tracker/internal/store"
+	"github.com/vladimir/team-cli-tracker/internal/trust"
 )
 
 func main() {
@@ -39,6 +40,8 @@ func main() {
 		runServe(os.Args[2:])
 	case "storage":
 		runStorage(os.Args[2:])
+	case "trust":
+		runTrust(os.Args[2:])
 	default:
 		printUsage()
 	}
@@ -198,6 +201,78 @@ func runStorage(args []string) {
 	}
 }
 
+func runTrust(args []string) {
+	if len(args) < 1 {
+		fmt.Println("trust commands: invite | use-invite | revoke | list")
+		return
+	}
+	switch args[0] {
+	case "invite":
+		fs := flag.NewFlagSet("trust invite", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		nodeID := fs.String("node-id", "", "node id to invite")
+		ttlSec := fs.Int("ttl-sec", 3600, "invite ttl in seconds")
+		_ = fs.Parse(args[1:])
+		if *nodeID == "" {
+			fatal(fmt.Errorf("node-id is required"))
+		}
+		tm, err := trust.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		token, exp, err := tm.CreateInvite(*nodeID, time.Duration(*ttlSec)*time.Second)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("invite_token=%s\nexpires_at=%s\n", token, exp.UTC().Format(time.RFC3339))
+	case "use-invite":
+		fs := flag.NewFlagSet("trust use-invite", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		nodeID := fs.String("node-id", "", "node id")
+		token := fs.String("token", "", "invite token")
+		_ = fs.Parse(args[1:])
+		if *nodeID == "" || *token == "" {
+			fatal(fmt.Errorf("node-id and token are required"))
+		}
+		tm, err := trust.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := tm.UseInvite(*token, *nodeID); err != nil {
+			fatal(err)
+		}
+		fmt.Println("ok: node trusted")
+	case "revoke":
+		fs := flag.NewFlagSet("trust revoke", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		nodeID := fs.String("node-id", "", "node id")
+		_ = fs.Parse(args[1:])
+		if *nodeID == "" {
+			fatal(fmt.Errorf("node-id is required"))
+		}
+		tm, err := trust.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := tm.RevokeNode(*nodeID); err != nil {
+			fatal(err)
+		}
+		fmt.Println("ok: node revoked")
+	case "list":
+		fs := flag.NewFlagSet("trust list", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		tm, err := trust.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		raw, _ := json.MarshalIndent(map[string]any{"trusted_nodes": tm.ListTrusted()}, "", "  ")
+		fmt.Println(string(raw))
+	default:
+		fmt.Println("trust commands: invite | use-invite | revoke | list")
+	}
+}
+
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
@@ -240,6 +315,13 @@ func runServe(args []string) {
 	if err != nil {
 		fatal(err)
 	}
+	trustManager, err := trust.Open(*dataDir)
+	if err != nil {
+		fatal(err)
+	}
+	if err := trustManager.TrustNode(id.NodeID); err != nil {
+		fatal(err)
+	}
 	s := &syncServer{
 		projectID:       *projectID,
 		nodeID:          id.NodeID,
@@ -251,6 +333,7 @@ func runServe(args []string) {
 		authTokens:      tokenMap,
 		httpClient:      httpClient,
 		peerToken:       strings.TrimSpace(*peerToken),
+		trustManager:    trustManager,
 	}
 
 	mux := http.NewServeMux()
@@ -261,6 +344,10 @@ func runServe(args []string) {
 	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
+	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
+	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
+	mux.HandleFunc("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
+	mux.HandleFunc("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -290,6 +377,7 @@ type syncServer struct {
 	authTokens      map[string]authPrincipal
 	httpClient      *http.Client
 	peerToken       string
+	trustManager    *trust.Manager
 }
 
 type transitionRequest struct {
@@ -361,11 +449,86 @@ func (s *syncServer) syncIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if s.trustManager != nil && !s.trustManager.IsTrusted(in.SignerID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "signer node is not trusted"})
+		return
+	}
 	if err := s.log.Append(in); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ingested"})
+}
+
+func (s *syncServer) trustInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		NodeID string `json:"node_id"`
+		TTLSec int    `json:"ttl_sec"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.TTLSec <= 0 {
+		in.TTLSec = 3600
+	}
+	token, exp, err := s.trustManager.CreateInvite(strings.TrimSpace(in.NodeID), time.Duration(in.TTLSec)*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expires_at": exp.UTC().Format(time.RFC3339), "node_id": in.NodeID})
+}
+
+func (s *syncServer) trustJoin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		NodeID string `json:"node_id"`
+		Token  string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" || strings.TrimSpace(in.Token) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.trustManager.UseInvite(strings.TrimSpace(in.Token), strings.TrimSpace(in.NodeID)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "trusted", "node_id": strings.TrimSpace(in.NodeID)})
+}
+
+func (s *syncServer) trustRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.trustManager.RevokeNode(strings.TrimSpace(in.NodeID)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "node_id": strings.TrimSpace(in.NodeID)})
+}
+
+func (s *syncServer) trustList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"trusted_nodes": s.trustManager.ListTrusted()})
 }
 
 func (s *syncServer) raftVoteTransition(w http.ResponseWriter, r *http.Request) {
@@ -720,6 +883,10 @@ func printUsage() {
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
+	fmt.Println("  node trust invite --node-id node-x [--ttl-sec 3600]")
+	fmt.Println("  node trust use-invite --node-id node-x --token <token>")
+	fmt.Println("  node trust revoke --node-id node-x")
+	fmt.Println("  node trust list")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 

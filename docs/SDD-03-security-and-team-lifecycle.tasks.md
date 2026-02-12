@@ -6,8 +6,8 @@
 - [x] T03-002 Implement mTLS for node-to-node communication.
 - [x] T03-003 Add token auth middleware for CLI/API operations.
 - [x] T03-004 Add role authorization matrix enforcement for issue/policy actions.
-- [ ] T03-005 Implement trusted-node allowlist and invite token flow.
-- [ ] T03-006 Implement node revoke flow and trust cache refresh.
+- [x] T03-005 Implement trusted-node allowlist and invite token flow.
+- [x] T03-006 Implement node revoke flow and trust cache refresh.
 - [ ] T03-007 Implement encryption-at-rest for sensitive event payload.
 - [ ] T03-008 Add key rotation commands and backward-compatible decryption path.
 - [ ] T03-009 Add event chain integrity verification command.
@@ -31,3 +31,5 @@
 - [x] T03-002 Implement mTLS for node-to-node communication.
 - [x] T03-003 Add token auth middleware for CLI/API operations.
 - [x] T03-004 Add role authorization matrix enforcement for issue/policy actions.
+- [x] T03-005 Implement trusted-node allowlist and invite token flow.
+- [x] T03-006 Implement node revoke flow and trust cache refresh.
