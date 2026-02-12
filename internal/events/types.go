@@ -9,6 +9,7 @@ type SignedEvent struct {
 	Type      string    `json:"type"`
 	Payload   []byte    `json:"payload"`
 	SignerID  string    `json:"signer_id"`
+	SignerPub []byte    `json:"signer_pub"`
 	Signature []byte    `json:"signature"`
 	Seq       uint64    `json:"seq"`
 	Timestamp time.Time `json:"timestamp"`

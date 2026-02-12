@@ -22,6 +22,7 @@ type EventLog struct {
 type persistedEvent struct {
 	events.SignedEvent
 	PayloadB64   string `json:"payload_b64"`
+	SignerPubB64 string `json:"signer_pub_b64"`
 	SignatureB64 string `json:"signature_b64"`
 }
 
@@ -70,9 +71,11 @@ func (l *EventLog) Append(e events.SignedEvent) error {
 	row := persistedEvent{
 		SignedEvent:  e,
 		PayloadB64:   base64.StdEncoding.EncodeToString(e.Payload),
+		SignerPubB64: base64.StdEncoding.EncodeToString(e.SignerPub),
 		SignatureB64: base64.StdEncoding.EncodeToString(e.Signature),
 	}
 	row.Payload = nil
+	row.SignerPub = nil
 	row.Signature = nil
 
 	raw, err := json.Marshal(row)
@@ -118,16 +121,53 @@ func (l *EventLog) ReadAll() ([]events.SignedEvent, error) {
 		if err != nil {
 			return nil, err
 		}
+		pub, err := base64.StdEncoding.DecodeString(row.SignerPubB64)
+		if err != nil {
+			return nil, err
+		}
 		sig, err := base64.StdEncoding.DecodeString(row.SignatureB64)
 		if err != nil {
 			return nil, err
 		}
 		row.Payload = payload
+		row.SignerPub = pub
 		row.Signature = sig
 		out = append(out, row.SignedEvent)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+func (l *EventLog) Clock(projectID string) (map[string]uint64, error) {
+	eventsAll, err := l.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]uint64)
+	for _, e := range eventsAll {
+		if e.ProjectID != projectID {
+			continue
+		}
+		if e.Seq > out[e.SignerID] {
+			out[e.SignerID] = e.Seq
+		}
+	}
+	return out, nil
+}
+
+func (l *EventLog) EventsAfter(projectID, signerID string, afterSeq uint64) ([]events.SignedEvent, error) {
+	eventsAll, err := l.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]events.SignedEvent, 0)
+	for _, e := range eventsAll {
+		if e.ProjectID != projectID || e.SignerID != signerID || e.Seq <= afterSeq {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }

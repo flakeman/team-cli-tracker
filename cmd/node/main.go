@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +29,8 @@ func main() {
 		runIssue(os.Args[2:])
 	case "board":
 		runBoard(os.Args[2:])
+	case "serve":
+		runServe(os.Args[2:])
 	default:
 		printUsage()
 	}
@@ -162,6 +167,209 @@ func runBoard(args []string) {
 	}
 }
 
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+	projectID := fs.String("project-id", envOr("PROJECT_ID", "OPS"), "project id")
+	listenAddr := fs.String("listen", envOr("LISTEN_ADDR", ":4101"), "http listen address")
+	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs")
+	tick := fs.Duration("sync-tick", 3*time.Second, "sync interval")
+	_ = fs.Parse(args)
+
+	id, err := node.LoadOrCreate(*dataDir, *nodeID)
+	if err != nil {
+		fatal(err)
+	}
+	log, err := store.Open(*dataDir)
+	if err != nil {
+		fatal(err)
+	}
+	peers := parsePeers(*peersCSV)
+	s := &syncServer{
+		projectID: *projectID,
+		nodeID:    id.NodeID,
+		log:       log,
+		peers:     peers,
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.healthz)
+	mux.HandleFunc("/sync/clock", s.syncClock)
+	mux.HandleFunc("/sync/events", s.syncEvents)
+	mux.HandleFunc("/sync/ingest", s.syncIngest)
+
+	go s.syncLoop(*tick)
+	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
+	if err := http.ListenAndServe(*listenAddr, mux); err != nil {
+		fatal(err)
+	}
+}
+
+type syncServer struct {
+	projectID string
+	nodeID    string
+	log       *store.EventLog
+	peers     []string
+}
+
+func (s *syncServer) healthz(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "node_id": s.nodeID})
+}
+
+func (s *syncServer) syncClock(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		projectID = s.projectID
+	}
+	clock, err := s.log.Clock(projectID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project_id": projectID, "clock": clock})
+}
+
+func (s *syncServer) syncEvents(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	signerID := strings.TrimSpace(r.URL.Query().Get("signer_id"))
+	afterSeqStr := strings.TrimSpace(r.URL.Query().Get("after_seq"))
+	if projectID == "" || signerID == "" || afterSeqStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project_id, signer_id, after_seq are required"})
+		return
+	}
+	afterSeq, err := strconv.ParseUint(afterSeqStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid after_seq"})
+		return
+	}
+	items, err := s.log.EventsAfter(projectID, signerID, afterSeq)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": items})
+}
+
+func (s *syncServer) syncIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in events.SignedEvent
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if err := events.VerifyByEventKey(in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.log.Append(in); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ingested"})
+}
+
+func (s *syncServer) syncLoop(interval time.Duration) {
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		for _, peer := range s.peers {
+			s.pullFromPeer(peer)
+		}
+	}
+}
+
+func (s *syncServer) pullFromPeer(peer string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	remoteClock, err := fetchClock(ctx, peer, s.projectID)
+	if err != nil {
+		return
+	}
+	localClock, err := s.log.Clock(s.projectID)
+	if err != nil {
+		return
+	}
+	for signerID, remoteSeq := range remoteClock {
+		localSeq := localClock[signerID]
+		if remoteSeq <= localSeq {
+			continue
+		}
+		items, err := fetchEvents(ctx, peer, s.projectID, signerID, localSeq)
+		if err != nil {
+			continue
+		}
+		for _, e := range items {
+			if err := events.VerifyByEventKey(e); err != nil {
+				continue
+			}
+			_ = s.log.Append(e)
+		}
+	}
+}
+
+func fetchClock(ctx context.Context, peerBaseURL, projectID string) (map[string]uint64, error) {
+	u := strings.TrimRight(peerBaseURL, "/") + "/sync/clock?project_id=" + projectID
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return nil, fmt.Errorf("clock status=%d", res.StatusCode)
+	}
+	var out struct {
+		Clock map[string]uint64 `json:"clock"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Clock, nil
+}
+
+func fetchEvents(ctx context.Context, peerBaseURL, projectID, signerID string, afterSeq uint64) ([]events.SignedEvent, error) {
+	u := fmt.Sprintf("%s/sync/events?project_id=%s&signer_id=%s&after_seq=%d",
+		strings.TrimRight(peerBaseURL, "/"),
+		projectID,
+		signerID,
+		afterSeq,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return nil, fmt.Errorf("events status=%d", res.StatusCode)
+	}
+	var out struct {
+		Events []events.SignedEvent `json:"events"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Events, nil
+}
+
 func appendIssueEvent(dataDir, nodeID, projectID, issueID, eventType string, payload any) error {
 	id, err := node.LoadOrCreate(dataDir, nodeID)
 	if err != nil {
@@ -182,6 +390,7 @@ func appendIssueEvent(dataDir, nodeID, projectID, issueID, eventType string, pay
 		Type:      eventType,
 		Payload:   raw,
 		SignerID:  id.NodeID,
+		SignerPub: id.Pub,
 		Seq:       log.NextSeq(projectID, id.NodeID),
 		Timestamp: time.Now().UTC(),
 	}
@@ -308,6 +517,7 @@ func printUsage() {
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
+	fmt.Println("  node serve --project-id OPS --listen :4101 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 
 func printIssueUsage() {
@@ -325,4 +535,26 @@ func envOr(k, fallback string) string {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+func parsePeers(csv string) []string {
+	items := strings.Split(csv, ",")
+	out := make([]string, 0, len(items))
+	for _, v := range items {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			v = "http://" + v
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func writeJSON(w http.ResponseWriter, code int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(payload)
 }

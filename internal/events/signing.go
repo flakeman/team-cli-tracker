@@ -30,6 +30,13 @@ func Verify(pub ed25519.PublicKey, e SignedEvent) error {
 	return nil
 }
 
+func VerifyByEventKey(e SignedEvent) error {
+	if len(e.SignerPub) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid signer public key size")
+	}
+	return Verify(ed25519.PublicKey(e.SignerPub), e)
+}
+
 func signingMessage(e SignedEvent) ([]byte, error) {
 	if e.ProjectID == "" || e.EntityID == "" || e.Type == "" || e.SignerID == "" {
 		return nil, fmt.Errorf("missing required signing fields")
