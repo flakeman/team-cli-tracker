@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -205,6 +207,15 @@ func runServe(args []string) {
 	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs")
 	nodeRole := fs.String("node-role", envOr("NODE_ROLE", "member"), "node role: admin|member")
 	preferredLeader := fs.String("preferred-leader", envOr("PREFERRED_LEADER", ""), "preferred leader node id (optional)")
+	authEnabled := fs.Bool("auth-enabled", envOr("AUTH_ENABLED", "false") == "true", "enable token auth")
+	authTokensJSON := fs.String("auth-tokens-json", envOr("AUTH_TOKENS_JSON", ""), "auth token map json")
+	peerToken := fs.String("peer-token", envOr("PEER_TOKEN", ""), "outgoing peer bearer token")
+	tlsCert := fs.String("tls-cert", envOr("TLS_CERT_FILE", ""), "server TLS cert file")
+	tlsKey := fs.String("tls-key", envOr("TLS_KEY_FILE", ""), "server TLS key file")
+	tlsCA := fs.String("tls-ca", envOr("TLS_CA_FILE", ""), "CA file for mTLS and client trust")
+	mtlsRequired := fs.Bool("mtls-required", envOr("MTLS_REQUIRED", "false") == "true", "require and verify client cert")
+	clientCert := fs.String("client-cert", envOr("CLIENT_TLS_CERT_FILE", ""), "client cert for outgoing peer requests")
+	clientKey := fs.String("client-key", envOr("CLIENT_TLS_KEY_FILE", ""), "client key for outgoing peer requests")
 	tick := fs.Duration("sync-tick", 3*time.Second, "sync interval")
 	_ = fs.Parse(args)
 
@@ -217,6 +228,18 @@ func runServe(args []string) {
 		fatal(err)
 	}
 	peers := parsePeers(*peersCSV)
+	tokenMap, err := parseAuthTokens(*authTokensJSON)
+	if err != nil {
+		fatal(err)
+	}
+	serverTLS, err := buildServerTLSConfig(*tlsCA, *mtlsRequired)
+	if err != nil {
+		fatal(err)
+	}
+	httpClient, err := buildPeerHTTPClient(*tlsCA, *clientCert, *clientKey)
+	if err != nil {
+		fatal(err)
+	}
 	s := &syncServer{
 		projectID:       *projectID,
 		nodeID:          id.NodeID,
@@ -224,20 +247,31 @@ func runServe(args []string) {
 		peers:           peers,
 		nodeRole:        strings.ToLower(strings.TrimSpace(*nodeRole)),
 		preferredLeader: strings.TrimSpace(*preferredLeader),
+		authEnabled:     *authEnabled,
+		authTokens:      tokenMap,
+		httpClient:      httpClient,
+		peerToken:       strings.TrimSpace(*peerToken),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.healthz)
-	mux.HandleFunc("/sync/clock", s.syncClock)
-	mux.HandleFunc("/sync/events", s.syncEvents)
-	mux.HandleFunc("/sync/ingest", s.syncIngest)
-	mux.HandleFunc("/raft/vote-transition", s.raftVoteTransition)
-	mux.HandleFunc("/raft/validate-transition", s.raftValidateTransition)
+	mux.HandleFunc("/sync/clock", s.withAuthAny(s.syncClock))
+	mux.HandleFunc("/sync/events", s.withAuthAny(s.syncEvents))
+	mux.HandleFunc("/sync/ingest", s.withAuthAny(s.syncIngest))
+	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
-	if err := http.ListenAndServe(*listenAddr, mux); err != nil {
+	server := &http.Server{Addr: *listenAddr, Handler: mux, TLSConfig: serverTLS}
+	if strings.TrimSpace(*tlsCert) != "" && strings.TrimSpace(*tlsKey) != "" {
+		if err := server.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	if err := server.ListenAndServe(); err != nil {
 		fatal(err)
 	}
 }
@@ -252,6 +286,10 @@ type syncServer struct {
 	pulledEvents    uint64
 	pullErrors      uint64
 	lastSyncUnix    int64
+	authEnabled     bool
+	authTokens      map[string]authPrincipal
+	httpClient      *http.Client
+	peerToken       string
 }
 
 type transitionRequest struct {
@@ -259,6 +297,12 @@ type transitionRequest struct {
 	IssueID   string `json:"issue_id"`
 	From      string `json:"from"`
 	To        string `json:"to"`
+}
+
+type authPrincipal struct {
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+	Active bool   `json:"active"`
 }
 
 func (s *syncServer) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -378,7 +422,7 @@ func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Reque
 	}
 
 	for _, peer := range s.peers {
-		ok, voterID, _ := requestTransitionVote(peer, in)
+		ok, voterID, _ := requestTransitionVote(s.getHTTPClient(), s.peerToken, peer, in)
 		if ok {
 			granted++
 		}
@@ -439,7 +483,7 @@ func (s *syncServer) pullFromPeer(peer string) {
 	defer cancel()
 	atomic.StoreInt64(&s.lastSyncUnix, time.Now().Unix())
 
-	remoteClock, err := fetchClock(ctx, peer, s.projectID)
+	remoteClock, err := s.fetchClock(ctx, peer, s.projectID)
 	if err != nil {
 		atomic.AddUint64(&s.pullErrors, 1)
 		log.Printf("sync clock error peer=%s err=%v", peer, err)
@@ -456,7 +500,7 @@ func (s *syncServer) pullFromPeer(peer string) {
 		if remoteSeq <= localSeq {
 			continue
 		}
-		items, err := fetchEvents(ctx, peer, s.projectID, signerID, localSeq)
+		items, err := s.fetchEvents(ctx, peer, s.projectID, signerID, localSeq)
 		if err != nil {
 			atomic.AddUint64(&s.pullErrors, 1)
 			log.Printf("sync fetch events error peer=%s signer=%s err=%v", peer, signerID, err)
@@ -475,13 +519,14 @@ func (s *syncServer) pullFromPeer(peer string) {
 	}
 }
 
-func fetchClock(ctx context.Context, peerBaseURL, projectID string) (map[string]uint64, error) {
+func (s *syncServer) fetchClock(ctx context.Context, peerBaseURL, projectID string) (map[string]uint64, error) {
 	u := strings.TrimRight(peerBaseURL, "/") + "/sync/clock?project_id=" + projectID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	res, err := http.DefaultClient.Do(req)
+	s.attachAuth(req, s.peerToken)
+	res, err := s.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +543,7 @@ func fetchClock(ctx context.Context, peerBaseURL, projectID string) (map[string]
 	return out.Clock, nil
 }
 
-func fetchEvents(ctx context.Context, peerBaseURL, projectID, signerID string, afterSeq uint64) ([]events.SignedEvent, error) {
+func (s *syncServer) fetchEvents(ctx context.Context, peerBaseURL, projectID, signerID string, afterSeq uint64) ([]events.SignedEvent, error) {
 	u := fmt.Sprintf("%s/sync/events?project_id=%s&signer_id=%s&after_seq=%d",
 		strings.TrimRight(peerBaseURL, "/"),
 		projectID,
@@ -509,7 +554,8 @@ func fetchEvents(ctx context.Context, peerBaseURL, projectID, signerID string, a
 	if err != nil {
 		return nil, err
 	}
-	res, err := http.DefaultClient.Do(req)
+	s.attachAuth(req, s.peerToken)
+	res, err := s.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -739,6 +785,9 @@ func validateTransitionProtected(policyURL, projectID, issueID, from, to string)
 	if err != nil {
 		return err
 	}
+	if token := strings.TrimSpace(envOr("USER_TOKEN", "")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -801,7 +850,7 @@ func validateWorkflowTransition(from, to string) error {
 	return nil
 }
 
-func requestTransitionVote(peerBaseURL string, in transitionRequest) (bool, string, error) {
+func requestTransitionVote(client *http.Client, peerToken, peerBaseURL string, in transitionRequest) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	raw, err := json.Marshal(in)
@@ -812,8 +861,11 @@ func requestTransitionVote(peerBaseURL string, in transitionRequest) (bool, stri
 	if err != nil {
 		return false, "", err
 	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return false, "", err
 	}
@@ -840,4 +892,136 @@ func modeName(preferredLeader string) string {
 		return "normal"
 	}
 	return "admin_preferred"
+}
+
+func (s *syncServer) withAuthAny(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authEnabled {
+			next(w, r)
+			return
+		}
+		if _, ok := s.authenticate(r); !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *syncServer) withAuthRoles(next http.HandlerFunc, roles ...string) http.HandlerFunc {
+	allowed := make(map[string]struct{}, len(roles))
+	for _, v := range roles {
+		allowed[strings.ToLower(strings.TrimSpace(v))] = struct{}{}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authEnabled {
+			next(w, r)
+			return
+		}
+		p, ok := s.authenticate(r)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(p.Role))]; !ok {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *syncServer) authenticate(r *http.Request) (authPrincipal, bool) {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return authPrincipal{}, false
+	}
+	token := strings.TrimSpace(auth[len("Bearer "):])
+	p, ok := s.authTokens[token]
+	if !ok || !p.Active {
+		return authPrincipal{}, false
+	}
+	return p, true
+}
+
+func parseAuthTokens(raw string) (map[string]authPrincipal, error) {
+	out := make(map[string]authPrincipal)
+	if strings.TrimSpace(raw) == "" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("invalid auth tokens json: %w", err)
+	}
+	return out, nil
+}
+
+func buildServerTLSConfig(caFile string, mtlsRequired bool) (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if !mtlsRequired {
+		return cfg, nil
+	}
+	if strings.TrimSpace(caFile) == "" {
+		return nil, fmt.Errorf("TLS_CA_FILE is required when mTLS is enabled")
+	}
+	pool, err := loadCertPool(caFile)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	cfg.ClientCAs = pool
+	return cfg, nil
+}
+
+func buildPeerHTTPClient(caFile, certFile, keyFile string) (*http.Client, error) {
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if strings.TrimSpace(caFile) != "" {
+		pool, err := loadCertPool(caFile)
+		if err != nil {
+			return nil, err
+		}
+		tlsCfg.RootCAs = pool
+	}
+	if strings.TrimSpace(certFile) != "" || strings.TrimSpace(keyFile) != "" {
+		if strings.TrimSpace(certFile) == "" || strings.TrimSpace(keyFile) == "" {
+			return nil, fmt.Errorf("both client cert and key are required")
+		}
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, err
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsCfg,
+		},
+	}, nil
+}
+
+func loadCertPool(caFile string) (*x509.CertPool, error) {
+	raw, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(raw) {
+		return nil, fmt.Errorf("failed to parse CA file")
+	}
+	return pool, nil
+}
+
+func (s *syncServer) attachAuth(req *http.Request, token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+}
+
+func (s *syncServer) getHTTPClient() *http.Client {
+	if s.httpClient != nil {
+		return s.httpClient
+	}
+	return http.DefaultClient
 }

@@ -72,11 +72,24 @@ go run ./cmd/node board --project-id OPS
 
 # вывести машиночитаемый JSON
 go run ./cmd/node board --project-id OPS -format json
+
+# запустить sync-узел
+go run ./cmd/node serve --project-id OPS --listen :4101 --peers "http://127.0.0.1:4102"
+
+# миграция схемы event-store
+go run ./cmd/node storage migrate --data-dir ./data
+
+# защищенный режим (TLS + token auth)
+go run ./cmd/node serve --project-id OPS --listen :4101 \
+  --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
+  --auth-enabled --auth-tokens-json '{"admin-token":{"user_id":"u1","role":"admin","active":true}}' \
+  --peer-token admin-token
 ```
 
 ### Документация
 - Спецификация архитектуры: `docs/SDD-01-decentralized-kanban.md`
-- SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`\n- SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`
+- SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`
+- SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`
 - Дорожная карта: `docs/ROADMAP.md`
 - Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Скрипты деплоя: `deploy/README.md`
@@ -162,11 +175,24 @@ go run ./cmd/node board --project-id OPS
 
 # machine-readable output
 go run ./cmd/node board --project-id OPS -format json
+
+# run sync node
+go run ./cmd/node serve --project-id OPS --listen :4101 --peers "http://127.0.0.1:4102"
+
+# run event-store schema migration hooks
+go run ./cmd/node storage migrate --data-dir ./data
+
+# secure mode (TLS + token auth)
+go run ./cmd/node serve --project-id OPS --listen :4101 \
+  --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
+  --auth-enabled --auth-tokens-json '{"admin-token":{"user_id":"u1","role":"admin","active":true}}' \
+  --peer-token admin-token
 ```
 
 ### Docs
 - Architecture spec: `docs/SDD-01-decentralized-kanban.md`
-- Near-term execution SDD: `docs/SDD-02-near-term-execution-plan.md`\n- Security and team lifecycle SDD: `docs/SDD-03-security-and-team-lifecycle.md`
+- Near-term execution SDD: `docs/SDD-02-near-term-execution-plan.md`
+- Security and team lifecycle SDD: `docs/SDD-03-security-and-team-lifecycle.md`
 - Delivery roadmap: `docs/ROADMAP.md`
 - 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Deploy scripts: `deploy/README.md`

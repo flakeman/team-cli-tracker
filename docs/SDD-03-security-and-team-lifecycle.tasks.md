@@ -2,10 +2,10 @@
 
 ## Backlog
 - [x] T03-000 Draft SDD-03.
-- [ ] T03-001 Implement TLS for API and sync endpoints.
-- [ ] T03-002 Implement mTLS for node-to-node communication.
-- [ ] T03-003 Add token auth middleware for CLI/API operations.
-- [ ] T03-004 Add role authorization matrix enforcement for issue/policy actions.
+- [x] T03-001 Implement TLS for API and sync endpoints.
+- [x] T03-002 Implement mTLS for node-to-node communication.
+- [x] T03-003 Add token auth middleware for CLI/API operations.
+- [x] T03-004 Add role authorization matrix enforcement for issue/policy actions.
 - [ ] T03-005 Implement trusted-node allowlist and invite token flow.
 - [ ] T03-006 Implement node revoke flow and trust cache refresh.
 - [ ] T03-007 Implement encryption-at-rest for sensitive event payload.
@@ -27,3 +27,7 @@
 
 ## Done
 - [x] T03-000 Draft SDD-03.
+- [x] T03-001 Implement TLS for API and sync endpoints.
+- [x] T03-002 Implement mTLS for node-to-node communication.
+- [x] T03-003 Add token auth middleware for CLI/API operations.
+- [x] T03-004 Add role authorization matrix enforcement for issue/policy actions.
