@@ -123,6 +123,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD сквозного логирования и выгрузки аудита: `docs/SDD-06-end-to-end-audit-logging-and-export.md`
 - План SDD-06: `docs/SDD-06-end-to-end-audit-logging-and-export.plan.md`
 - Задачи SDD-06: `docs/SDD-06-end-to-end-audit-logging-and-export.tasks.md`
+- SDD визуальной полировки board: `docs/SDD-07-board-visual-polish.md`
+- План SDD-07: `docs/SDD-07-board-visual-polish.plan.md`
+- Задачи SDD-07: `docs/SDD-07-board-visual-polish.tasks.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
@@ -266,6 +269,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - End-to-end audit logging and export SDD: `docs/SDD-06-end-to-end-audit-logging-and-export.md`
 - SDD-06 plan: `docs/SDD-06-end-to-end-audit-logging-and-export.plan.md`
 - SDD-06 tasks: `docs/SDD-06-end-to-end-audit-logging-and-export.tasks.md`
+- Board visual polish SDD: `docs/SDD-07-board-visual-polish.md`
+- SDD-07 plan: `docs/SDD-07-board-visual-polish.plan.md`
+- SDD-07 tasks: `docs/SDD-07-board-visual-polish.tasks.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
