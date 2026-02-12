@@ -486,6 +486,10 @@ func runServe(args []string) {
 	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-trust-invite", s.withAuthRoles(s.raftVoteTrustInvite, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-trust-invite", s.withAuthRoles(s.raftValidateTrustInvite, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-trust-revoke", s.withAuthRoles(s.raftVoteTrustRevoke, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-trust-revoke", s.withAuthRoles(s.raftValidateTrustRevoke, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
@@ -551,6 +555,17 @@ type governanceReconfigureRequest struct {
 type teamOffboardRequest struct {
 	ProjectID string `json:"project_id"`
 	UserID    string `json:"user_id"`
+}
+
+type trustInviteRequest struct {
+	ProjectID string `json:"project_id"`
+	NodeID    string `json:"node_id"`
+	TTLSec    int    `json:"ttl_sec"`
+}
+
+type trustRevokeRequest struct {
+	ProjectID string `json:"project_id"`
+	NodeID    string `json:"node_id"`
 }
 
 type authPrincipal struct {
@@ -631,12 +646,31 @@ func (s *syncServer) trustInvite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		NodeID string `json:"node_id"`
-		TTLSec int    `json:"ttl_sec"`
-	}
+	var in trustInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTrustInviteWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
 		return
 	}
 	if in.TTLSec <= 0 {
@@ -647,7 +681,15 @@ func (s *syncServer) trustInvite(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.auditManager.Append("trust.invite", s.actorFromReq(r), "ok", map[string]any{"node_id": in.NodeID})
+	s.auditManager.Append("trust.invite", s.actorFromReq(r), "ok", map[string]any{
+		"node_id":            in.NodeID,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expires_at": exp.UTC().Format(time.RFC3339), "node_id": in.NodeID})
 }
 
@@ -677,19 +719,157 @@ func (s *syncServer) trustRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		NodeID string `json:"node_id"`
-	}
+	var in trustRevokeRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTrustRevokeWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
 		return
 	}
 	if err := s.trustManager.RevokeNode(strings.TrimSpace(in.NodeID)); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.auditManager.Append("trust.revoke", s.actorFromReq(r), "ok", map[string]any{"node_id": in.NodeID})
+	s.auditManager.Append("trust.revoke", s.actorFromReq(r), "ok", map[string]any{
+		"node_id":            in.NodeID,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "node_id": strings.TrimSpace(in.NodeID)})
+}
+
+func (s *syncServer) raftVoteTrustInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in trustInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.NodeID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "node_id is required", "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateTrustInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in trustInviteRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.NodeID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "node_id is required", "granted": 0, "needed": quorumNeeded(len(s.peers) + 1)})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTrustInviteWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "quorum not reached", "granted": granted, "needed": needed})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
+}
+
+func (s *syncServer) raftVoteTrustRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in trustRevokeRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.NodeID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "node_id is required", "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateTrustRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in trustRevokeRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.NodeID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "node_id is required", "granted": 0, "needed": quorumNeeded(len(s.peers) + 1)})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTrustRevokeWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "quorum not reached", "granted": granted, "needed": needed})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 }
 
 func (s *syncServer) trustList(w http.ResponseWriter, r *http.Request) {
@@ -788,7 +968,16 @@ func (s *syncServer) teamOffboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.auditManager.Append("team.offboard", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "reassigned": cnt})
+	s.auditManager.Append("team.offboard", s.actorFromReq(r), "ok", map[string]any{
+		"user_id":            in.UserID,
+		"reassigned":         cnt,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "offboarded", "user_id": in.UserID, "reassigned_issues": cnt})
 }
 
@@ -867,6 +1056,46 @@ func (s *syncServer) validateTeamOffboardWithQuorum(in teamOffboardRequest) (gra
 	}
 	for _, peer := range s.peers {
 		allow, voterID, _ := requestTeamOffboardVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
+}
+
+func (s *syncServer) validateTrustInviteWithQuorum(in trustInviteRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestTrustInviteVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
+}
+
+func (s *syncServer) validateTrustRevokeWithQuorum(in trustRevokeRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestTrustRevokeVote(s.getHTTPClient(), s.peerToken, peer, in)
 		if allow {
 			granted++
 		}
@@ -959,7 +1188,15 @@ func (s *syncServer) governanceReconfigure(w http.ResponseWriter, r *http.Reques
 	}
 	nodes := s.govManager.List()
 	voting := s.govManager.VotingCount()
-	s.auditManager.Append("governance.reconfigure", s.actorFromReq(r), "ok", map[string]any{"voting_nodes": in.VotingNodes})
+	s.auditManager.Append("governance.reconfigure", s.actorFromReq(r), "ok", map[string]any{
+		"voting_nodes":       in.VotingNodes,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":       "reconfigured",
 		"nodes":        nodes,
@@ -1211,6 +1448,7 @@ func (s *syncServer) pullFromPeer(peer string) {
 			log.Printf("sync fetch events error peer=%s signer=%s err=%v", peer, signerID, err)
 			continue
 		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Seq < items[j].Seq })
 		for _, e := range items {
 			if err := events.VerifyByEventKey(e); err != nil {
 				atomic.AddUint64(&s.pullErrors, 1)
@@ -1652,6 +1890,72 @@ func requestTeamOffboardVote(client *http.Client, peerToken, peerBaseURL string,
 		return false, "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-team-offboard", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
+func requestTrustInviteVote(client *http.Client, peerToken, peerBaseURL string, in trustInviteRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-trust-invite", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
+func requestTrustRevokeVote(client *http.Client, peerToken, peerBaseURL string, in trustRevokeRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-trust-revoke", bytes.NewReader(raw))
 	if err != nil {
 		return false, "", err
 	}
