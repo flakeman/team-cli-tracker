@@ -482,6 +482,8 @@ func runServe(args []string) {
 	mux.HandleFunc("/sync/ingest", s.withAuthAny(s.syncIngest))
 	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
@@ -537,6 +539,11 @@ type transitionRequest struct {
 	IssueID   string `json:"issue_id"`
 	From      string `json:"from"`
 	To        string `json:"to"`
+}
+
+type governanceReconfigureRequest struct {
+	ProjectID   string   `json:"project_id"`
+	VotingNodes []string `json:"voting_nodes"`
 }
 
 type authPrincipal struct {
@@ -807,11 +814,31 @@ func (s *syncServer) governanceReconfigure(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		VotingNodes []string `json:"voting_nodes"`
-	}
+	var in governanceReconfigureRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || len(in.VotingNodes) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateGovernanceReconfigureWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
 		return
 	}
 	if err := s.govManager.ReplaceVotingSet(in.VotingNodes); err != nil {
@@ -827,6 +854,92 @@ func (s *syncServer) governanceReconfigure(w http.ResponseWriter, r *http.Reques
 		"voting_count": voting,
 		"quorum":       quorumNeeded(voting),
 	})
+}
+
+func (s *syncServer) raftVoteGovernanceReconfigure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in governanceReconfigureRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if err := validateVotingSet(in.VotingNodes); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": err.Error(), "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateGovernanceReconfigure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in governanceReconfigureRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if err := validateVotingSet(in.VotingNodes); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":   false,
+			"reason":  err.Error(),
+			"granted": 0,
+			"needed":  quorumNeeded(len(s.peers) + 1),
+		})
+		return
+	}
+
+	granted, needed, preferredOnline, ok := s.validateGovernanceReconfigureWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":   false,
+			"reason":  "quorum not reached",
+			"granted": granted,
+			"needed":  needed,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
+}
+
+func (s *syncServer) validateGovernanceReconfigureWithQuorum(in governanceReconfigureRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestGovernanceReconfigureVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
 }
 
 func (s *syncServer) securityAudit(w http.ResponseWriter, r *http.Request) {
@@ -1384,6 +1497,60 @@ func requestTransitionVote(client *http.Client, peerToken, peerBaseURL string, i
 		return false, "", err
 	}
 	return out.Allow, out.NodeID, nil
+}
+
+func requestGovernanceReconfigureVote(client *http.Client, peerToken, peerBaseURL string, in governanceReconfigureRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-governance-reconfigure", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
+func validateVotingSet(nodes []string) error {
+	if len(nodes) == 0 {
+		return fmt.Errorf("voting_nodes must not be empty")
+	}
+	if len(nodes)%2 == 0 {
+		return fmt.Errorf("voting_nodes count must be odd")
+	}
+	seen := make(map[string]struct{}, len(nodes))
+	for _, raw := range nodes {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return fmt.Errorf("voting_nodes must not contain empty node id")
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("voting_nodes must be unique")
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }
 
 func quorumNeeded(total int) int {

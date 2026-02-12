@@ -235,6 +235,27 @@ func TestGovernanceReconfigureKeepsOddVotingSet(t *testing.T) {
 	}
 }
 
+func TestGovernanceReconfigureRejectsEvenVotingSet(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "g"), "node-1", "OPS")
+	defer cleanup()
+
+	body := []byte(`{"voting_nodes":["node-1","node-2"]}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/governance/reconfigure", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusBadRequest)
+	}
+}
+
 type testNodeServer struct {
 	syncServer *syncServer
 	server     *httptest.Server
@@ -269,6 +290,8 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/sync/ingest", s.syncIngest)
 	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	ts := httptest.NewServer(mux)

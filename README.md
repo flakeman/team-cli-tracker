@@ -104,6 +104,7 @@ go run ./cmd/node trust revoke --node-id node-2
 - Спецификация архитектуры: `docs/SDD-01-decentralized-kanban.md`
 - SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`
 - SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`
+- SDD consensus-критичных мутаций: `docs/SDD-04-consensus-critical-mutations.md`
 - Security runbook и incident checklist: `docs/SECURITY-RUNBOOK.md`
 - Реестр технического долга: `docs/TECH-DEBT.md`
 - Дорожная карта: `docs/ROADMAP.md`
@@ -223,6 +224,7 @@ go run ./cmd/node trust revoke --node-id node-2
 - Architecture spec: `docs/SDD-01-decentralized-kanban.md`
 - Near-term execution SDD: `docs/SDD-02-near-term-execution-plan.md`
 - Security and team lifecycle SDD: `docs/SDD-03-security-and-team-lifecycle.md`
+- Consensus-critical mutations SDD: `docs/SDD-04-consensus-critical-mutations.md`
 - Security runbook and incident checklist: `docs/SECURITY-RUNBOOK.md`
 - Technical debt register: `docs/TECH-DEBT.md`
 - Delivery roadmap: `docs/ROADMAP.md`
