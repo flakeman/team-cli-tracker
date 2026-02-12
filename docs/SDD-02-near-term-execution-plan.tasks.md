@@ -18,10 +18,10 @@
 - [x] T02-014 Wire transition command through Raft validation path.
 - [x] T02-015 Implement admin-preferred election priority mode.
 - [x] T02-016 Add failover test: admin preferred leader down -> re-election.
-- [ ] T02-017 Add integration test: 3-node converge after network split/reconnect.
-- [ ] T02-018 Add integration test: invalid signature and replay rejection.
-- [ ] T02-019 Add metrics/logging for sync lag and policy decisions.
-- [ ] T02-020 Update runbooks for SDD-02 operational flows.
+- [x] T02-017 Add integration test: 3-node converge after network split/reconnect.
+- [x] T02-018 Add integration test: invalid signature and replay rejection.
+- [x] T02-019 Add metrics/logging for sync lag and policy decisions.
+- [x] T02-020 Update runbooks for SDD-02 operational flows.
 
 ## Done
 - [x] T02-000 Draft SDD-02.
@@ -40,3 +40,7 @@
 - [x] T02-014 Wire transition command through Raft validation path.
 - [x] T02-015 Implement admin-preferred election priority mode.
 - [x] T02-016 Add failover test: admin preferred leader down -> re-election.
+- [x] T02-017 Add integration test: 3-node converge after network split/reconnect.
+- [x] T02-018 Add integration test: invalid signature and replay rejection.
+- [x] T02-019 Add metrics/logging for sync lag and policy decisions.
+- [x] T02-020 Update runbooks for SDD-02 operational flows.

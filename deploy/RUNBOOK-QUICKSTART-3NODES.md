@@ -58,6 +58,7 @@ sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-
 ```bash
 systemctl is-active team-cli-tracker
 sudo journalctl -u team-cli-tracker -n 50 --no-pager
+curl -s http://127.0.0.1:4101/metrics
 ```
 
 ### 5) Обновление
@@ -105,6 +106,12 @@ sudo systemctl restart team-cli-tracker
 3. `deploy/cluster.node-3.env.example`
 4. `deploy/cluster.node-4.env.example`
 5. `deploy/cluster.node-5.env.example`
+
+### 8) Protected transition проверка
+Пример перехода через защищенный policy-контур:
+```bash
+go run ./cmd/node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress --policy-url http://127.0.0.1:4101
+```
 
 ---
 
@@ -166,6 +173,7 @@ Run on each node:
 ```bash
 systemctl is-active team-cli-tracker
 sudo journalctl -u team-cli-tracker -n 50 --no-pager
+curl -s http://127.0.0.1:4101/metrics
 ```
 
 ### 5) Update rollout
@@ -213,3 +221,9 @@ Use templates:
 3. `deploy/cluster.node-3.env.example`
 4. `deploy/cluster.node-4.env.example`
 5. `deploy/cluster.node-5.env.example`
+
+### 8) Protected transition check
+Example transition via protected policy path:
+```bash
+go run ./cmd/node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress --policy-url http://127.0.0.1:4101
+```

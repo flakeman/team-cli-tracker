@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/vladimir/team-cli-tracker/internal/events"
@@ -210,6 +212,7 @@ func runServe(args []string) {
 	mux.HandleFunc("/sync/ingest", s.syncIngest)
 	mux.HandleFunc("/raft/vote-transition", s.raftVoteTransition)
 	mux.HandleFunc("/raft/validate-transition", s.raftValidateTransition)
+	mux.HandleFunc("/metrics", s.metrics)
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -225,6 +228,9 @@ type syncServer struct {
 	peers           []string
 	nodeRole        string
 	preferredLeader string
+	pulledEvents    uint64
+	pullErrors      uint64
+	lastSyncUnix    int64
 }
 
 type transitionRequest struct {
@@ -379,6 +385,21 @@ func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
+	last := atomic.LoadInt64(&s.lastSyncUnix)
+	lastSyncAt := ""
+	if last > 0 {
+		lastSyncAt = time.Unix(last, 0).UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node_id":       s.nodeID,
+		"project_id":    s.projectID,
+		"pulled_events": atomic.LoadUint64(&s.pulledEvents),
+		"pull_errors":   atomic.LoadUint64(&s.pullErrors),
+		"last_sync_at":  lastSyncAt,
+	})
+}
+
 func (s *syncServer) syncLoop(interval time.Duration) {
 	if interval <= 0 {
 		interval = 3 * time.Second
@@ -395,13 +416,18 @@ func (s *syncServer) syncLoop(interval time.Duration) {
 func (s *syncServer) pullFromPeer(peer string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
+	atomic.StoreInt64(&s.lastSyncUnix, time.Now().Unix())
 
 	remoteClock, err := fetchClock(ctx, peer, s.projectID)
 	if err != nil {
+		atomic.AddUint64(&s.pullErrors, 1)
+		log.Printf("sync clock error peer=%s err=%v", peer, err)
 		return
 	}
 	localClock, err := s.log.Clock(s.projectID)
 	if err != nil {
+		atomic.AddUint64(&s.pullErrors, 1)
+		log.Printf("sync local clock error peer=%s err=%v", peer, err)
 		return
 	}
 	for signerID, remoteSeq := range remoteClock {
@@ -411,13 +437,19 @@ func (s *syncServer) pullFromPeer(peer string) {
 		}
 		items, err := fetchEvents(ctx, peer, s.projectID, signerID, localSeq)
 		if err != nil {
+			atomic.AddUint64(&s.pullErrors, 1)
+			log.Printf("sync fetch events error peer=%s signer=%s err=%v", peer, signerID, err)
 			continue
 		}
 		for _, e := range items {
 			if err := events.VerifyByEventKey(e); err != nil {
+				atomic.AddUint64(&s.pullErrors, 1)
+				log.Printf("sync verify event error peer=%s signer=%s seq=%d err=%v", peer, e.SignerID, e.Seq, err)
 				continue
 			}
-			_ = s.log.Append(e)
+			if err := s.log.Append(e); err == nil {
+				atomic.AddUint64(&s.pulledEvents, 1)
+			}
 		}
 	}
 }
