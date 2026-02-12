@@ -15,6 +15,7 @@
 6. Authority model: Raft quorum for RBAC, workflow config, and protected transitions.
 7. Storage: local embedded DB per node (SQLite/Bbolt) + snapshots.
 8. Security: TLS in transport, signed payloads, replay protection by nonce/sequence.
+9. Leadership policy: `admin-preferred leader` (election priority bias), but not hard-pinned leader.
 
 ## Why Not Bitcoin PoW
 - PoW слишком дорогой по latency/cost.
@@ -29,12 +30,15 @@
 5. Offline writes queue with later sync.
 6. Signed audit trail of all task mutations.
 7. Per-project encryption keys rotation.
+8. If participant count is even, support witness node to preserve odd voting quorum.
+9. Support admin-preferred election priority without sacrificing automatic failover.
 
 ## Non-Functional Requirements
 - p95 local read under 100ms.
 - convergence after reconnect under 10s (small team baseline).
 - no data loss on single node restart.
 - tolerate one node failure in 3-node quorum.
+- leader unavailability must not block cluster progress (automatic re-election).
 
 ## Deployment Modes
 1. Home/LAN mode: all nodes in Tailscale mesh.
@@ -58,3 +62,4 @@
 - Unauthorized role cannot execute protected transition.
 - Same project state visible from each node after sync.
 - Audit chain verification passes on all nodes.
+- In admin-preferred mode, admin node is favored when available, but failover still works if it is down.

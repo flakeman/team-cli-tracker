@@ -81,6 +81,8 @@ sudo systemctl restart team-cli-tracker
 ### Team size = 2
 - Recommended: keep `3` voting nodes and add one lightweight witness node.
 - Why: Raft quorum with 2 nodes is fragile (no fault tolerance, split-brain risk).
+- If one user is admin, set admin node as `preferred leader` (priority), not hard-locked leader.
+- If admin node is down, non-admin leader election must continue automatically.
 
 ### Team size > 3
 - Users do not need to be voting nodes.
@@ -92,6 +94,7 @@ sudo systemctl restart team-cli-tracker
 ### Quorum rule
 - Use odd number of voting nodes: `3`, `5`, `7`.
 - Quorum is `N/2 + 1`.
+- Avoid hard pinning leader to one node role, otherwise failover can break.
 
 ### 5-node mode
 - Use templates:
