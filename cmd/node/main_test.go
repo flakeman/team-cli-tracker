@@ -306,6 +306,33 @@ func TestPrintBoardPlainTableFormat(t *testing.T) {
 	}
 }
 
+func TestFilterAuditEventsByTimeAndUser(t *testing.T) {
+	in := []audit.Event{
+		{Time: "2026-02-12T10:00:00Z", Type: "team.onboard", Actor: "u1", Status: "ok"},
+		{Time: "2026-02-12T11:00:00Z", Type: "team.role_change", Actor: "u2", Status: "ok"},
+		{Time: "2026-02-12T12:00:00Z", Type: "trust.invite", Actor: "u1", Status: "ok"},
+	}
+	from, to, err := parseAuditTimeRange("2026-02-12T10:30:00Z", "2026-02-12T12:00:00Z")
+	if err != nil {
+		t.Fatalf("parse range: %v", err)
+	}
+	users := parseUserFilter("u1")
+	out := filterAuditEvents(in, from, to, users)
+	if len(out) != 1 {
+		t.Fatalf("unexpected filtered size: got=%d want=1", len(out))
+	}
+	if out[0].Type != "trust.invite" {
+		t.Fatalf("unexpected event type: got=%s", out[0].Type)
+	}
+}
+
+func TestParseAuditTimeRangeRejectsInvertedRange(t *testing.T) {
+	_, _, err := parseAuditTimeRange("2026-02-12T12:00:00Z", "2026-02-12T11:00:00Z")
+	if err == nil {
+		t.Fatalf("expected range error")
+	}
+}
+
 func TestChaosPartitionRejoinDeterministicConvergence(t *testing.T) {
 	base := t.TempDir()
 	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")

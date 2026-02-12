@@ -82,6 +82,26 @@ func (m *Manager) ReadTail(limit int) ([]Event, error) {
 	return out, nil
 }
 
+func (m *Manager) ReadAll() ([]Event, error) {
+	raw, err := os.ReadFile(m.path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitLines(string(raw))
+	out := make([]Event, 0, len(lines))
+	for _, ln := range lines {
+		if ln == "" {
+			continue
+		}
+		var e Event
+		if err := json.Unmarshal([]byte(ln), &e); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
 func splitLines(s string) []string {
 	out := make([]string, 0)
 	cur := ""

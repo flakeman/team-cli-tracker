@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/csv"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -56,6 +57,8 @@ func main() {
 		runTrust(os.Args[2:])
 	case "auth":
 		runAuth(os.Args[2:])
+	case "audit":
+		runAudit(os.Args[2:])
 	default:
 		printUsage()
 	}
@@ -609,6 +612,83 @@ func runAuth(args []string) {
 		fmt.Println(string(raw))
 	default:
 		fmt.Println("auth commands: issue | revoke | list | bind-role | list-bindings")
+	}
+}
+
+func runAudit(args []string) {
+	if len(args) < 1 {
+		fmt.Println("audit commands: export")
+		return
+	}
+	switch args[0] {
+	case "export":
+		fs := flag.NewFlagSet("audit export", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		all := fs.Bool("all", false, "export all audit records")
+		from := fs.String("from", "", "RFC3339 start time (inclusive)")
+		to := fs.String("to", "", "RFC3339 end time (inclusive)")
+		user := fs.String("user", "", "comma-separated user ids")
+		format := fs.String("format", "jsonl", "jsonl|csv")
+		_ = fs.Parse(args[1:])
+
+		fromTS, toTS, err := parseAuditTimeRange(*from, *to)
+		if err != nil {
+			fatal(err)
+		}
+		users := parseUserFilter(*user)
+		if !*all && fromTS == nil && toTS == nil && len(users) == 0 {
+			*all = true
+		}
+		if !*all && fromTS == nil && toTS == nil && len(users) == 0 {
+			fatal(fmt.Errorf("set --all or at least one filter: --from/--to/--user"))
+		}
+		am, err := audit.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		records, err := am.ReadAll()
+		if err != nil {
+			fatal(err)
+		}
+		records = filterAuditEvents(records, fromTS, toTS, users)
+		switch strings.ToLower(strings.TrimSpace(*format)) {
+		case "jsonl":
+			for _, rec := range records {
+				raw, err := json.Marshal(rec)
+				if err != nil {
+					continue
+				}
+				fmt.Println(string(raw))
+			}
+		case "csv":
+			w := csv.NewWriter(os.Stdout)
+			_ = w.Write([]string{"time", "type", "actor", "status", "details_json"})
+			for _, rec := range records {
+				detailsRaw := "{}"
+				if rec.Details != nil {
+					if raw, err := json.Marshal(rec.Details); err == nil {
+						detailsRaw = string(raw)
+					}
+				}
+				_ = w.Write([]string{rec.Time, rec.Type, rec.Actor, rec.Status, detailsRaw})
+			}
+			w.Flush()
+			if err := w.Error(); err != nil {
+				fatal(err)
+			}
+		default:
+			fatal(fmt.Errorf("unsupported format: %s", *format))
+		}
+		am.Append("audit.export", "local-cli", "ok", map[string]any{
+			"all":    *all,
+			"from":   strings.TrimSpace(*from),
+			"to":     strings.TrimSpace(*to),
+			"user":   strings.TrimSpace(*user),
+			"format": strings.ToLower(strings.TrimSpace(*format)),
+			"count":  len(records),
+		})
+	default:
+		fmt.Println("audit commands: export")
 	}
 }
 
@@ -2779,12 +2859,76 @@ func printUsage() {
 	fmt.Println("  node auth list")
 	fmt.Println("  node auth bind-role --user-id u1 --role lead")
 	fmt.Println("  node auth list-bindings")
+	fmt.Println("  node audit export [--all] [--from RFC3339] [--to RFC3339] [--user u1,u2] [--format jsonl|csv]")
 	fmt.Println("  node team onboard --user-id u1 --role dev [--duty]")
 	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
 	fmt.Println("  node team offboard --project-id OPS --user-id u1")
 	fmt.Println("  node team list")
 	fmt.Println("  node serve ... [--rate-limit-per-min 120] [--rate-limit-sensitive-per-min 30] [--discovery-enabled true] [--public-url http://node-1:4101]")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
+}
+
+func parseAuditTimeRange(fromRaw, toRaw string) (*time.Time, *time.Time, error) {
+	var fromTS *time.Time
+	var toTS *time.Time
+	if v := strings.TrimSpace(fromRaw); v != "" {
+		tm, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid --from value: %w", err)
+		}
+		u := tm.UTC()
+		fromTS = &u
+	}
+	if v := strings.TrimSpace(toRaw); v != "" {
+		tm, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid --to value: %w", err)
+		}
+		u := tm.UTC()
+		toTS = &u
+	}
+	if fromTS != nil && toTS != nil && fromTS.After(*toTS) {
+		return nil, nil, fmt.Errorf("--from must be <= --to")
+	}
+	return fromTS, toTS, nil
+}
+
+func parseUserFilter(raw string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, part := range strings.Split(raw, ",") {
+		v := strings.TrimSpace(part)
+		if v == "" {
+			continue
+		}
+		out[v] = struct{}{}
+	}
+	return out
+}
+
+func filterAuditEvents(in []audit.Event, fromTS, toTS *time.Time, users map[string]struct{}) []audit.Event {
+	out := make([]audit.Event, 0, len(in))
+	for _, e := range in {
+		if fromTS != nil || toTS != nil {
+			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(e.Time))
+			if err != nil {
+				continue
+			}
+			tu := ts.UTC()
+			if fromTS != nil && tu.Before(*fromTS) {
+				continue
+			}
+			if toTS != nil && tu.After(*toTS) {
+				continue
+			}
+		}
+		if len(users) > 0 {
+			if _, ok := users[strings.TrimSpace(e.Actor)]; !ok {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func printIssueUsage() {
