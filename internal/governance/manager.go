@@ -86,6 +86,51 @@ func (m *Manager) IsVoting(nodeID string) bool {
 	return ok && n.Active && n.Role == "voting"
 }
 
+func (m *Manager) ReplaceVotingSet(votingIDs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(votingIDs) == 0 {
+		return fmt.Errorf("voting set cannot be empty")
+	}
+	if len(votingIDs)%2 == 0 {
+		return fmt.Errorf("voting set must be odd-sized")
+	}
+	target := map[string]struct{}{}
+	for _, id := range votingIDs {
+		if id == "" {
+			continue
+		}
+		target[id] = struct{}{}
+	}
+	if len(target)%2 == 0 {
+		return fmt.Errorf("voting set must be odd-sized after dedupe")
+	}
+	// Keep existing nodes and convert role/active by target membership.
+	for id, n := range m.doc.Nodes {
+		if _, ok := target[id]; ok {
+			n.Role = "voting"
+			n.Active = true
+			m.doc.Nodes[id] = n
+		} else {
+			n.Role = "non_voting"
+			// keep active state as-is for non-voting members
+			m.doc.Nodes[id] = n
+		}
+	}
+	// Add missing ids as active voting nodes.
+	for id := range target {
+		if _, ok := m.doc.Nodes[id]; ok {
+			continue
+		}
+		m.doc.Nodes[id] = Node{
+			NodeID: id,
+			Role:   "voting",
+			Active: true,
+		}
+	}
+	return m.save()
+}
+
 func (m *Manager) load() error {
 	raw, err := os.ReadFile(m.path)
 	if os.IsNotExist(err) {

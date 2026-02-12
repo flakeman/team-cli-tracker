@@ -492,6 +492,7 @@ func runServe(args []string) {
 	mux.HandleFunc("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
 	mux.HandleFunc("/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
 	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
 	mux.HandleFunc("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
 
@@ -795,6 +796,33 @@ func (s *syncServer) governanceList(w http.ResponseWriter, r *http.Request) {
 	nodes := s.govManager.List()
 	voting := s.govManager.VotingCount()
 	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes":        nodes,
+		"voting_count": voting,
+		"quorum":       quorumNeeded(voting),
+	})
+}
+
+func (s *syncServer) governanceReconfigure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in struct {
+		VotingNodes []string `json:"voting_nodes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || len(in.VotingNodes) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.govManager.ReplaceVotingSet(in.VotingNodes); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	nodes := s.govManager.List()
+	voting := s.govManager.VotingCount()
+	s.auditManager.Append("governance.reconfigure", s.actorFromReq(r), "ok", map[string]any{"voting_nodes": in.VotingNodes})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":       "reconfigured",
 		"nodes":        nodes,
 		"voting_count": voting,
 		"quorum":       quorumNeeded(voting),

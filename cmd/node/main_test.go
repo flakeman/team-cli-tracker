@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vladimir/team-cli-tracker/internal/audit"
 	"github.com/vladimir/team-cli-tracker/internal/events"
+	"github.com/vladimir/team-cli-tracker/internal/governance"
 	"github.com/vladimir/team-cli-tracker/internal/node"
 	"github.com/vladimir/team-cli-tracker/internal/store"
 	"github.com/vladimir/team-cli-tracker/internal/team"
@@ -191,6 +193,48 @@ func TestMTLSConfigRequiresCA(t *testing.T) {
 	}
 }
 
+func TestGovernanceReconfigureKeepsOddVotingSet(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "g"), "node-1", "OPS")
+	defer cleanup()
+	gm, err := governance.Open(filepath.Join(base, "g"))
+	if err != nil {
+		t.Fatalf("governance open: %v", err)
+	}
+	if err := gm.SetNodeRole("node-1", "voting", true); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	if err := gm.SetNodeRole("node-2", "voting", true); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	if err := gm.SetNodeRole("node-3", "voting", true); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	srv.syncServer.govManager = gm
+
+	body := []byte(`{"voting_nodes":["node-1","node-3","node-4"]}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/governance/reconfigure", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// auth disabled in test server by default, so direct call is enough.
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusOK)
+	}
+	if got := gm.VotingCount(); got != 3 {
+		t.Fatalf("voting count=%d want=3", got)
+	}
+	if gm.IsVoting("node-2") {
+		t.Fatalf("node-2 should be non-voting after reconfigure")
+	}
+}
+
 type testNodeServer struct {
 	syncServer *syncServer
 	server     *httptest.Server
@@ -203,11 +247,21 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	if err != nil {
 		t.Fatalf("open log: %v", err)
 	}
+	gm, err := governance.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open governance: %v", err)
+	}
+	am, err := audit.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open audit: %v", err)
+	}
 	s := &syncServer{
-		projectID: projectID,
-		nodeID:    nodeID,
-		log:       logDB,
-		peers:     nil,
+		projectID:    projectID,
+		nodeID:       nodeID,
+		log:          logDB,
+		peers:        nil,
+		govManager:   gm,
+		auditManager: am,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sync/clock", s.syncClock)
@@ -215,6 +269,7 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/sync/ingest", s.syncIngest)
 	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
+	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	ts := httptest.NewServer(mux)
 	out := &testNodeServer{syncServer: s, server: ts, url: ts.URL}

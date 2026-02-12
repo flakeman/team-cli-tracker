@@ -17,13 +17,13 @@
 - [x] T03-013 Implement reassignment policy engine (lead/duty/unassigned).
 - [x] T03-014 Trigger reassignment on offboarding and persist audit reason.
 - [x] T03-015 Add voting/non-voting node role management.
-- [ ] T03-016 Add rolling voting set reconfiguration flow.
+- [x] T03-016 Add rolling voting set reconfiguration flow.
 - [x] T03-017 Add API rate limiting and abuse protection.
 - [x] T03-018 Add security audit endpoint/query support.
 - [x] T03-019 Tests: mTLS rejection and authz denial cases.
 - [x] T03-020 Tests: offboarding reassignment correctness.
-- [ ] T03-021 Tests: voting set change without divergence.
-- [ ] T03-022 Docs: security runbook and incident response checklist.
+- [x] T03-021 Tests: voting set change without divergence.
+- [x] T03-022 Docs: security runbook and incident response checklist.
 
 ## Done
 - [x] T03-000 Draft SDD-03.
@@ -42,7 +42,10 @@
 - [x] T03-013 Implement reassignment policy engine (lead/duty/unassigned).
 - [x] T03-014 Trigger reassignment on offboarding and persist audit reason.
 - [x] T03-015 Add voting/non-voting node role management.
+- [x] T03-016 Add rolling voting set reconfiguration flow.
 - [x] T03-017 Add API rate limiting and abuse protection.
 - [x] T03-018 Add security audit endpoint/query support.
 - [x] T03-019 Tests: mTLS rejection and authz denial cases.
 - [x] T03-020 Tests: offboarding reassignment correctness.
+- [x] T03-021 Tests: voting set change without divergence.
+- [x] T03-022 Docs: security runbook and incident response checklist.
