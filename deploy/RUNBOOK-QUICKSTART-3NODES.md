@@ -75,3 +75,28 @@ git log --oneline -n 5
 git checkout <previous_commit_sha>
 sudo systemctl restart team-cli-tracker
 ```
+
+## 7) If Team Size Is 2 Or More Than 3
+
+### Team size = 2
+- Recommended: keep `3` voting nodes and add one lightweight witness node.
+- Why: Raft quorum with 2 nodes is fragile (no fault tolerance, split-brain risk).
+
+### Team size > 3
+- Users do not need to be voting nodes.
+- Recommended:
+1. Keep `3` voting nodes for small/medium load.
+2. Move to `5` voting nodes for higher load/availability.
+3. Keep remaining participants as client/non-voting nodes.
+
+### Quorum rule
+- Use odd number of voting nodes: `3`, `5`, `7`.
+- Quorum is `N/2 + 1`.
+
+### 5-node mode
+- Use templates:
+1. `deploy/cluster.node-1.env.example`
+2. `deploy/cluster.node-2.env.example`
+3. `deploy/cluster.node-3.env.example`
+4. `deploy/cluster.node-4.env.example`
+5. `deploy/cluster.node-5.env.example`
