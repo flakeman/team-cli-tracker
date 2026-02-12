@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -103,10 +105,14 @@ func runIssueTransition(args []string) {
 	issueID := fs.String("issue-id", "", "issue id")
 	from := fs.String("from", "", "old status")
 	to := fs.String("to", "", "new status")
+	policyURL := fs.String("policy-url", envOr("POLICY_URL", ""), "policy endpoint base URL (optional)")
 	_ = fs.Parse(args)
 
 	if *projectID == "" || *issueID == "" || *to == "" {
 		fatal(fmt.Errorf("project-id, issue-id and to are required"))
+	}
+	if err := validateTransitionProtected(*policyURL, *projectID, *issueID, *from, *to); err != nil {
+		fatal(err)
 	}
 	payload := map[string]string{
 		"from": *from,
@@ -198,6 +204,8 @@ func runServe(args []string) {
 	mux.HandleFunc("/sync/clock", s.syncClock)
 	mux.HandleFunc("/sync/events", s.syncEvents)
 	mux.HandleFunc("/sync/ingest", s.syncIngest)
+	mux.HandleFunc("/raft/vote-transition", s.raftVoteTransition)
+	mux.HandleFunc("/raft/validate-transition", s.raftValidateTransition)
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -211,6 +219,13 @@ type syncServer struct {
 	nodeID    string
 	log       *store.EventLog
 	peers     []string
+}
+
+type transitionRequest struct {
+	ProjectID string `json:"project_id"`
+	IssueID   string `json:"issue_id"`
+	From      string `json:"from"`
+	To        string `json:"to"`
 }
 
 func (s *syncServer) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -274,6 +289,77 @@ func (s *syncServer) syncIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ingested"})
+}
+
+func (s *syncServer) raftVoteTransition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in transitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if err := validateWorkflowTransition(in.From, in.To); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": err.Error(), "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID})
+}
+
+func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in transitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if err := validateWorkflowTransition(in.From, in.To); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":   false,
+			"reason":  err.Error(),
+			"granted": 0,
+			"needed":  quorumNeeded(len(s.peers) + 1),
+		})
+		return
+	}
+
+	granted := 1 // local vote
+	totalNodes := len(s.peers) + 1
+	needed := quorumNeeded(totalNodes)
+
+	for _, peer := range s.peers {
+		ok, _ := requestTransitionVote(peer, in)
+		if ok {
+			granted++
+		}
+	}
+	if granted < needed {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":   false,
+			"reason":  "quorum not reached",
+			"granted": granted,
+			"needed":  needed,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":   true,
+		"granted": granted,
+		"needed":  needed,
+	})
 }
 
 func (s *syncServer) syncLoop(interval time.Duration) {
@@ -514,7 +600,7 @@ func printUsage() {
 	fmt.Println("usage:")
 	fmt.Println("  node identity --node-id node-1 --data-dir ./data")
 	fmt.Println("  node issue create --project-id OPS --issue-id OPS-1 --summary \"...\" [--priority high] [--assignee user]")
-	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress")
+	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
@@ -557,4 +643,122 @@ func writeJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func validateTransitionProtected(policyURL, projectID, issueID, from, to string) error {
+	if err := validateWorkflowTransition(from, to); err != nil {
+		return err
+	}
+	if strings.TrimSpace(policyURL) == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reqBody := transitionRequest{
+		ProjectID: projectID,
+		IssueID:   issueID,
+		From:      from,
+		To:        to,
+	}
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(policyURL, "/")+"/raft/validate-transition", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return fmt.Errorf("policy status=%d body=%s", res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		Allow   bool   `json:"allow"`
+		Reason  string `json:"reason"`
+		Granted int    `json:"granted"`
+		Needed  int    `json:"needed"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return err
+	}
+	if !out.Allow {
+		if out.Reason == "" {
+			out.Reason = "transition denied by protected policy"
+		}
+		return fmt.Errorf("%s (granted=%d needed=%d)", out.Reason, out.Granted, out.Needed)
+	}
+	return nil
+}
+
+func validateWorkflowTransition(from, to string) error {
+	allowed := map[string]map[string]struct{}{
+		"todo": {
+			"in_progress": {},
+		},
+		"in_progress": {
+			"todo":        {},
+			"code_review": {},
+		},
+		"code_review": {
+			"in_progress": {},
+			"testing":     {},
+		},
+		"testing": {
+			"in_progress": {},
+			"done":        {},
+		},
+		"done": {},
+	}
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" || from == to {
+		return nil
+	}
+	next, ok := allowed[from]
+	if !ok {
+		return fmt.Errorf("unknown from status: %s", from)
+	}
+	if _, ok := next[to]; !ok {
+		return fmt.Errorf("transition %s -> %s is not allowed", from, to)
+	}
+	return nil
+}
+
+func requestTransitionVote(peerBaseURL string, in transitionRequest) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-transition", bytes.NewReader(raw))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow bool `json:"allow"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	return out.Allow, nil
+}
+
+func quorumNeeded(total int) int {
+	return total/2 + 1
 }

@@ -14,8 +14,8 @@
 - [x] T02-010 Add `issue comment` CLI command and event producer.
 - [x] T02-011 Implement local projection reducer for board state.
 - [x] T02-012 Implement CLI board renderer (plain + JSON).
-- [ ] T02-013 Implement Raft policy service for transition validation.
-- [ ] T02-014 Wire transition command through Raft validation path.
+- [x] T02-013 Implement Raft policy service for transition validation.
+- [x] T02-014 Wire transition command through Raft validation path.
 - [ ] T02-015 Implement admin-preferred election priority mode.
 - [ ] T02-016 Add failover test: admin preferred leader down -> re-election.
 - [ ] T02-017 Add integration test: 3-node converge after network split/reconnect.
@@ -36,3 +36,5 @@
 - [x] T02-010 Add `issue comment` CLI command and event producer.
 - [x] T02-011 Implement local projection reducer for board state.
 - [x] T02-012 Implement CLI board renderer (plain + JSON).
+- [x] T02-013 Implement Raft policy service for transition validation.
+- [x] T02-014 Wire transition command through Raft validation path.
