@@ -68,10 +68,10 @@ Assignee WIP limit: 3
 go run ./cmd/node
 
 # отрисовать доску из API трекера
-go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS
+go run ./cmd/node board --project-id OPS
 
 # вывести машиночитаемый JSON
-go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS -format json
+go run ./cmd/node board --project-id OPS -format json
 ```
 
 ### Документация
@@ -158,10 +158,10 @@ Assignee WIP limit: 3
 go run ./cmd/node
 
 # render board from tracker API
-go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS
+go run ./cmd/node board --project-id OPS
 
 # machine-readable output
-go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS -format json
+go run ./cmd/node board --project-id OPS -format json
 ```
 
 ### Docs
@@ -177,3 +177,4 @@ go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS -format 
 3. Basic issue commands: create, transition, comment.
 4. CLI board rendering from replicated state.
 5. Raft-protected transition validation.
+
