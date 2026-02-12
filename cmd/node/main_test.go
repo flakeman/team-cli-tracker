@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	mathrand "math/rand"
 	"net/http"
@@ -266,6 +267,42 @@ func TestThreeNodeConflictingTransitionsDeterministicAfterRejoin(t *testing.T) {
 	}
 	if sa != sb || sb != sc {
 		t.Fatalf("divergent final status after rejoin: a=%q b=%q c=%q", sa, sb, sc)
+	}
+}
+
+func TestPrintBoardPlainTableFormat(t *testing.T) {
+	board := map[string][]issueProjection{
+		"todo":        {{ID: "OPS-1", Summary: "first", Assignee: ""}},
+		"in_progress": {{ID: "OPS-2", Summary: "second", Assignee: "dev1"}},
+		"code_review": {},
+		"testing":     {},
+		"done":        {{ID: "OPS-3", Summary: "third", Assignee: "qa1"}},
+	}
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	printBoardPlain("OPS", board)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	raw, _ := io.ReadAll(r)
+	out := string(raw)
+	if !strings.Contains(out, "Project: OPS  Revision: 3") {
+		t.Fatalf("missing project header: %s", out)
+	}
+	if !strings.Contains(out, "Assignee WIP limit: 3") {
+		t.Fatalf("missing wip header: %s", out)
+	}
+	if !strings.Contains(out, "To Do [1/20]") || !strings.Contains(out, "In Progress [1/8]") || !strings.Contains(out, "Done [1/inf]") {
+		t.Fatalf("missing column headers: %s", out)
+	}
+	if !strings.Contains(out, "OPS-1 first @unassigned") || !strings.Contains(out, "OPS-2 second @dev1") || !strings.Contains(out, "OPS-3 third @qa1") {
+		t.Fatalf("missing issue cards in table: %s", out)
+	}
+	if !strings.Contains(out, "+----------------------------------+") {
+		t.Fatalf("missing table separator: %s", out)
 	}
 }
 

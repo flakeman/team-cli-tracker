@@ -15,11 +15,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/vladimir/team-cli-tracker/internal/audit"
@@ -171,26 +173,86 @@ func runBoard(args []string) {
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	format := fs.String("format", "plain", "plain|json")
+	once := fs.Bool("once", false, "print once and exit (plain mode defaults to live updates)")
+	refresh := fs.Duration("refresh", mustDuration(envOr("BOARD_REFRESH", "2s"), 2*time.Second), "live board refresh interval")
+	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs for board sync")
+	peerToken := fs.String("peer-token", envOr("PEER_TOKEN", ""), "outgoing peer bearer token for board sync")
+	tlsCA := fs.String("tls-ca", envOr("TLS_CA_FILE", ""), "CA file for peer TLS")
+	clientCert := fs.String("client-cert", envOr("CLIENT_TLS_CERT_FILE", ""), "client cert for peer TLS")
+	clientKey := fs.String("client-key", envOr("CLIENT_TLS_KEY_FILE", ""), "client key for peer TLS")
 	_ = fs.Parse(args)
 	if *projectID == "" {
 		fatal(fmt.Errorf("project-id is required"))
+	}
+	if strings.ToLower(strings.TrimSpace(*format)) == "json" {
+		*once = true
 	}
 
 	log, err := store.Open(*dataDir)
 	if err != nil {
 		fatal(err)
 	}
-	all, err := log.ReadAll()
+	peers := parsePeers(*peersCSV)
+	httpClient, err := buildPeerHTTPClient(*tlsCA, *clientCert, *clientKey)
 	if err != nil {
 		fatal(err)
 	}
-	board := projectBoardFromEvents(*projectID, all)
-	switch *format {
-	case "json":
-		raw, _ := json.MarshalIndent(board, "", "  ")
-		fmt.Println(string(raw))
-	default:
-		printBoardPlain(*projectID, board)
+	syncHelper := &syncServer{
+		projectID: *projectID,
+		log:       log,
+		peers:     peers,
+		httpClient: httpClient,
+		peerToken: strings.TrimSpace(*peerToken),
+	}
+	syncOnce := func() {
+		for _, peer := range peers {
+			_ = syncHelper.pullFromPeer(peer)
+		}
+	}
+	render := func() error {
+		all, err := log.ReadAll()
+		if err != nil {
+			return err
+		}
+		board := projectBoardFromEvents(*projectID, all)
+		switch *format {
+		case "json":
+			raw, _ := json.MarshalIndent(board, "", "  ")
+			fmt.Println(string(raw))
+		default:
+			printBoardPlain(*projectID, board)
+		}
+		return nil
+	}
+
+	syncOnce()
+	if *once {
+		if err := render(); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	if strings.ToLower(strings.TrimSpace(*format)) != "plain" {
+		fatal(fmt.Errorf("live mode is supported only for plain format"))
+	}
+	if *refresh <= 0 {
+		*refresh = 2 * time.Second
+	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	t := time.NewTicker(*refresh)
+	defer t.Stop()
+	for {
+		syncOnce()
+		fmt.Print("\033[H\033[2J")
+		if err := render(); err != nil {
+			fatal(err)
+		}
+		select {
+		case <-t.C:
+		case <-stop:
+			return
+		}
 	}
 }
 
@@ -2619,25 +2681,79 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 }
 
 func printBoardPlain(projectID string, board map[string][]issueProjection) {
-	columns := []string{"todo", "in_progress", "code_review", "testing", "done"}
-	fmt.Printf("Project: %s\n", projectID)
-	for _, c := range columns {
-		fmt.Printf("[%s]\n", c)
-		if len(board[c]) == 0 {
-			fmt.Println("  (empty)")
-			continue
+	cols := []struct {
+		Key   string
+		Title string
+		Limit string
+	}{
+		{Key: "todo", Title: "To Do", Limit: "20"},
+		{Key: "in_progress", Title: "In Progress", Limit: "8"},
+		{Key: "code_review", Title: "Code Review", Limit: "6"},
+		{Key: "testing", Title: "Testing", Limit: "6"},
+		{Key: "done", Title: "Done", Limit: "inf"},
+	}
+	cellW := 34
+	totalIssues := 0
+	for _, c := range cols {
+		totalIssues += len(board[c.Key])
+	}
+	fmt.Printf("Project: %s  Revision: %d\n", projectID, totalIssues)
+	fmt.Println("Assignee WIP limit: 3")
+	sep := "+" + strings.Repeat(strings.Repeat("-", cellW)+"+", len(cols))
+	fmt.Println(sep)
+	headerCells := make([]string, 0, len(cols))
+	for _, c := range cols {
+		h := fmt.Sprintf("%s [%d/%s]", c.Title, len(board[c.Key]), c.Limit)
+		headerCells = append(headerCells, padOrTrim(h, cellW))
+	}
+	fmt.Printf("|%s|\n", strings.Join(headerCells, "|"))
+	fmt.Println(sep)
+
+	maxRows := 0
+	for _, c := range cols {
+		if n := len(board[c.Key]); n > maxRows {
+			maxRows = n
 		}
-		for _, it := range board[c] {
-			assignee := it.Assignee
+	}
+	for row := 0; row < maxRows; row++ {
+		line := make([]string, 0, len(cols))
+		for _, c := range cols {
+			if row >= len(board[c.Key]) {
+				line = append(line, strings.Repeat(" ", cellW))
+				continue
+			}
+			it := board[c.Key][row]
+			assignee := strings.TrimSpace(it.Assignee)
 			if assignee == "" {
 				assignee = "unassigned"
 			}
-			fmt.Printf("  - %s | %s | %s | @%s\n", it.ID, it.Summary, it.Priority, assignee)
-			if len(it.Comments) > 0 {
-				fmt.Printf("    comments: %d\n", len(it.Comments))
-			}
+			card := fmt.Sprintf("%s %s @%s", it.ID, strings.TrimSpace(it.Summary), assignee)
+			line = append(line, padOrTrim(card, cellW))
 		}
+		fmt.Printf("|%s|\n", strings.Join(line, "|"))
 	}
+	if maxRows == 0 {
+		empty := make([]string, 0, len(cols))
+		for range cols {
+			empty = append(empty, strings.Repeat(" ", cellW))
+		}
+		fmt.Printf("|%s|\n", strings.Join(empty, "|"))
+	}
+	fmt.Println(sep)
+}
+
+func padOrTrim(s string, w int) string {
+	rs := []rune(s)
+	if len(rs) > w {
+		if w <= 1 {
+			return string(rs[:w])
+		}
+		return string(rs[:w-1]) + "…"
+	}
+	if len(rs) < w {
+		return s + strings.Repeat(" ", w-len(rs))
+	}
+	return s
 }
 
 func printUsage() {
@@ -2647,7 +2763,7 @@ func printUsage() {
 	fmt.Println("  node issue create --project-id OPS --issue-id OPS-1 --summary \"...\" [--priority high] [--assignee user]")
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
-	fmt.Println("  node board --project-id OPS [--format plain|json]")
+	fmt.Println("  node board --project-id OPS [--format plain|json] [--once] [--refresh 2s] [--peers http://127.0.0.1:4102]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
 	fmt.Println("  node storage enable-encryption [--data-dir ./data]")
 	fmt.Println("  node storage rotate-key [--data-dir ./data] [--enforce-due] [--max-age 720h]")
