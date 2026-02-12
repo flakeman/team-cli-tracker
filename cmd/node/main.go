@@ -201,11 +201,11 @@ func runBoard(args []string) {
 		fatal(err)
 	}
 	syncHelper := &syncServer{
-		projectID: *projectID,
-		log:       log,
-		peers:     peers,
+		projectID:  *projectID,
+		log:        log,
+		peers:      peers,
 		httpClient: httpClient,
-		peerToken: strings.TrimSpace(*peerToken),
+		peerToken:  strings.TrimSpace(*peerToken),
 	}
 	syncOnce := func() {
 		for _, peer := range peers {
@@ -385,7 +385,7 @@ func runStorage(args []string) {
 		}
 		if am, err := audit.Open(*dataDir); err == nil {
 			am.Append("storage.key.recovery_drill", "local-cli", "ok", map[string]any{
-				"active_key_id": keyID,
+				"active_key_id":  keyID,
 				"events_checked": len(after),
 			})
 		}
@@ -689,14 +689,14 @@ func runAudit(args []string) {
 			fmt.Fprintf(os.Stderr, "next_cursor=%s\n", nextCursor)
 		}
 		am.Append("audit.export", "local-cli", "ok", map[string]any{
-			"all":    *all,
-			"from":   strings.TrimSpace(*from),
-			"to":     strings.TrimSpace(*to),
-			"user":   strings.TrimSpace(*user),
-			"format": strings.ToLower(strings.TrimSpace(*format)),
-			"count":  len(paged),
-			"limit":  *limit,
-			"cursor": strings.TrimSpace(*cursor),
+			"all":         *all,
+			"from":        strings.TrimSpace(*from),
+			"to":          strings.TrimSpace(*to),
+			"user":        strings.TrimSpace(*user),
+			"format":      strings.ToLower(strings.TrimSpace(*format)),
+			"count":       len(paged),
+			"limit":       *limit,
+			"cursor":      strings.TrimSpace(*cursor),
 			"next_cursor": nextCursor,
 		})
 	case "verify-integrity":
@@ -917,42 +917,42 @@ func runServe(args []string) {
 }
 
 type syncServer struct {
-	projectID            string
-	nodeID               string
-	log                  *store.EventLog
-	peers                []string
-	nodeRole             string
-	preferredLeader      string
-	pulledEvents         uint64
-	pullErrors           uint64
-	lastSyncUnix         int64
-	authEnabled          bool
-	authTokens           map[string]authPrincipal
-	authManager          *authstore.Manager
-	httpClient           *http.Client
-	peerToken            string
-	publicURL            string
-	discoveryEnabled     bool
-	discoveryTTL         time.Duration
-	trustManager         *trust.Manager
-	teamManager          *team.Manager
-	identity             node.Identity
-	govManager           *governance.Manager
-	auditManager         *audit.Manager
-	rateLimiter          *simpleRateLimiter
-	sensitiveRateLimiter *simpleRateLimiter
-	rateLimitDenied      atomic.Uint64
-	rateLimitDeniedDefault atomic.Uint64
+	projectID                string
+	nodeID                   string
+	log                      *store.EventLog
+	peers                    []string
+	nodeRole                 string
+	preferredLeader          string
+	pulledEvents             uint64
+	pullErrors               uint64
+	lastSyncUnix             int64
+	authEnabled              bool
+	authTokens               map[string]authPrincipal
+	authManager              *authstore.Manager
+	httpClient               *http.Client
+	peerToken                string
+	publicURL                string
+	discoveryEnabled         bool
+	discoveryTTL             time.Duration
+	trustManager             *trust.Manager
+	teamManager              *team.Manager
+	identity                 node.Identity
+	govManager               *governance.Manager
+	auditManager             *audit.Manager
+	rateLimiter              *simpleRateLimiter
+	sensitiveRateLimiter     *simpleRateLimiter
+	rateLimitDenied          atomic.Uint64
+	rateLimitDeniedDefault   atomic.Uint64
 	rateLimitDeniedSensitive atomic.Uint64
-	authnDenied          atomic.Uint64
-	authzDenied          atomic.Uint64
-	syncPeerPulls        atomic.Uint64
-	syncPeerPullSuccess  atomic.Uint64
-	syncPeerSkippedBackoff atomic.Uint64
-	peerMu               sync.Mutex
-	peerSync             map[string]peerSyncState
-	discoveredPeers      map[string]int64
-	peerNodeByURL        map[string]string
+	authnDenied              atomic.Uint64
+	authzDenied              atomic.Uint64
+	syncPeerPulls            atomic.Uint64
+	syncPeerPullSuccess      atomic.Uint64
+	syncPeerSkippedBackoff   atomic.Uint64
+	peerMu                   sync.Mutex
+	peerSync                 map[string]peerSyncState
+	discoveredPeers          map[string]int64
+	peerNodeByURL            map[string]string
 }
 
 type peerSyncState struct {
@@ -2306,21 +2306,21 @@ func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	now := time.Now().UTC()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"node_id":       s.nodeID,
-		"project_id":    s.projectID,
-		"pulled_events": atomic.LoadUint64(&s.pulledEvents),
-		"pull_errors":   atomic.LoadUint64(&s.pullErrors),
-		"sync_peer_pulls": s.syncPeerPulls.Load(),
-		"sync_peer_pull_success": s.syncPeerPullSuccess.Load(),
-		"sync_peer_skipped_backoff": s.syncPeerSkippedBackoff.Load(),
-		"sync_peer_backoff_active": s.peerBackoffActive(now),
-		"sync_discovered_peers": s.discoveredPeerCount(),
-		"rate_limit_denied_total": s.rateLimitDenied.Load(),
-		"rate_limit_denied_default": s.rateLimitDeniedDefault.Load(),
+		"node_id":                     s.nodeID,
+		"project_id":                  s.projectID,
+		"pulled_events":               atomic.LoadUint64(&s.pulledEvents),
+		"pull_errors":                 atomic.LoadUint64(&s.pullErrors),
+		"sync_peer_pulls":             s.syncPeerPulls.Load(),
+		"sync_peer_pull_success":      s.syncPeerPullSuccess.Load(),
+		"sync_peer_skipped_backoff":   s.syncPeerSkippedBackoff.Load(),
+		"sync_peer_backoff_active":    s.peerBackoffActive(now),
+		"sync_discovered_peers":       s.discoveredPeerCount(),
+		"rate_limit_denied_total":     s.rateLimitDenied.Load(),
+		"rate_limit_denied_default":   s.rateLimitDeniedDefault.Load(),
 		"rate_limit_denied_sensitive": s.rateLimitDeniedSensitive.Load(),
-		"authn_denied_total": s.authnDenied.Load(),
-		"authz_denied_total": s.authzDenied.Load(),
-		"last_sync_at":  lastSyncAt,
+		"authn_denied_total":          s.authnDenied.Load(),
+		"authz_denied_total":          s.authzDenied.Load(),
+		"last_sync_at":                lastSyncAt,
 	})
 }
 
@@ -2837,6 +2837,12 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 }
 
 func printBoardPlain(projectID string, board map[string][]issueProjection) {
+	fmt.Print(renderBoardPlain(projectID, board))
+}
+
+func renderBoardPlain(projectID string, board map[string][]issueProjection) string {
+	const boardCellWidth = 34
+	const assigneeWIPLimit = 3
 	cols := []struct {
 		Key   string
 		Title string
@@ -2848,22 +2854,22 @@ func printBoardPlain(projectID string, board map[string][]issueProjection) {
 		{Key: "testing", Title: "Testing", Limit: "6"},
 		{Key: "done", Title: "Done", Limit: "inf"},
 	}
-	cellW := 34
 	totalIssues := 0
 	for _, c := range cols {
 		totalIssues += len(board[c.Key])
 	}
-	fmt.Printf("Project: %s  Revision: %d\n", projectID, totalIssues)
-	fmt.Println("Assignee WIP limit: 3")
-	sep := "+" + strings.Repeat(strings.Repeat("-", cellW)+"+", len(cols))
-	fmt.Println(sep)
+	var out strings.Builder
+	fmt.Fprintf(&out, "Project: %s  Revision: %d\n", projectID, totalIssues)
+	fmt.Fprintf(&out, "Assignee WIP limit: %d\n", assigneeWIPLimit)
+	sep := "+" + strings.Repeat(strings.Repeat("-", boardCellWidth)+"+", len(cols))
+	out.WriteString(sep + "\n")
 	headerCells := make([]string, 0, len(cols))
 	for _, c := range cols {
 		h := fmt.Sprintf("%s [%d/%s]", c.Title, len(board[c.Key]), c.Limit)
-		headerCells = append(headerCells, padOrTrim(h, cellW))
+		headerCells = append(headerCells, padOrTrim(h, boardCellWidth))
 	}
-	fmt.Printf("|%s|\n", strings.Join(headerCells, "|"))
-	fmt.Println(sep)
+	fmt.Fprintf(&out, "|%s|\n", strings.Join(headerCells, "|"))
+	out.WriteString(sep + "\n")
 
 	maxRows := 0
 	for _, c := range cols {
@@ -2875,7 +2881,7 @@ func printBoardPlain(projectID string, board map[string][]issueProjection) {
 		line := make([]string, 0, len(cols))
 		for _, c := range cols {
 			if row >= len(board[c.Key]) {
-				line = append(line, strings.Repeat(" ", cellW))
+				line = append(line, strings.Repeat(" ", boardCellWidth))
 				continue
 			}
 			it := board[c.Key][row]
@@ -2884,27 +2890,28 @@ func printBoardPlain(projectID string, board map[string][]issueProjection) {
 				assignee = "unassigned"
 			}
 			card := fmt.Sprintf("%s %s @%s", it.ID, strings.TrimSpace(it.Summary), assignee)
-			line = append(line, padOrTrim(card, cellW))
+			line = append(line, padOrTrim(card, boardCellWidth))
 		}
-		fmt.Printf("|%s|\n", strings.Join(line, "|"))
+		fmt.Fprintf(&out, "|%s|\n", strings.Join(line, "|"))
 	}
 	if maxRows == 0 {
 		empty := make([]string, 0, len(cols))
 		for range cols {
-			empty = append(empty, strings.Repeat(" ", cellW))
+			empty = append(empty, strings.Repeat(" ", boardCellWidth))
 		}
-		fmt.Printf("|%s|\n", strings.Join(empty, "|"))
+		fmt.Fprintf(&out, "|%s|\n", strings.Join(empty, "|"))
 	}
-	fmt.Println(sep)
+	out.WriteString(sep + "\n")
+	return out.String()
 }
 
 func padOrTrim(s string, w int) string {
 	rs := []rune(s)
 	if len(rs) > w {
-		if w <= 1 {
+		if w <= 3 {
 			return string(rs[:w])
 		}
-		return string(rs[:w-1]) + "…"
+		return string(rs[:w-3]) + "..."
 	}
 	if len(rs) < w {
 		return s + strings.Repeat(" ", w-len(rs))

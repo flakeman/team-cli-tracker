@@ -306,6 +306,51 @@ func TestPrintBoardPlainTableFormat(t *testing.T) {
 	}
 }
 
+func TestRenderBoardPlainEmptyBoard(t *testing.T) {
+	board := map[string][]issueProjection{
+		"todo": {}, "in_progress": {}, "code_review": {}, "testing": {}, "done": {},
+	}
+	out := renderBoardPlain("OPS", board)
+	if !strings.Contains(out, "Project: OPS  Revision: 0") {
+		t.Fatalf("missing empty revision header: %s", out)
+	}
+	if strings.Count(out, "|                                  |                                  |                                  |                                  |                                  |") < 1 {
+		t.Fatalf("missing empty table row: %s", out)
+	}
+}
+
+func TestRenderBoardPlainLongCardTruncates(t *testing.T) {
+	board := map[string][]issueProjection{
+		"todo":        {{ID: "OPS-100500", Summary: strings.Repeat("very-long-summary-", 6), Assignee: "verylongassigneeid"}},
+		"in_progress": {}, "code_review": {}, "testing": {}, "done": {},
+	}
+	out := renderBoardPlain("OPS", board)
+	if !strings.Contains(out, "...") {
+		t.Fatalf("expected truncation marker: %s", out)
+	}
+	if strings.Contains(out, "вЂ¦") {
+		t.Fatalf("found broken ellipsis encoding: %s", out)
+	}
+}
+
+func TestRenderBoardPlainDeterministicAcrossCalls(t *testing.T) {
+	board := map[string][]issueProjection{
+		"todo":        {{ID: "OPS-1", Summary: "a", Assignee: ""}, {ID: "OPS-2", Summary: "b", Assignee: "u2"}},
+		"in_progress": {{ID: "OPS-3", Summary: "c", Assignee: "u3"}},
+		"code_review": {},
+		"testing":     {{ID: "OPS-4", Summary: "d", Assignee: "u4"}},
+		"done":        {},
+	}
+	out1 := renderBoardPlain("OPS", board)
+	out2 := renderBoardPlain("OPS", board)
+	if out1 != out2 {
+		t.Fatalf("non-deterministic board render")
+	}
+	if strings.Count(out1, "\n") < 6 {
+		t.Fatalf("unexpectedly short table output: %s", out1)
+	}
+}
+
 func TestFilterAuditEventsByTimeAndUser(t *testing.T) {
 	in := []audit.Event{
 		{Time: "2026-02-12T10:00:00Z", Type: "team.onboard", Actor: "u1", Status: "ok"},
