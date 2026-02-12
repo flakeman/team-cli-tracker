@@ -11,27 +11,14 @@ This runbook gives exact command order for `node-1`, `node-2`, `node-3`.
 ```bash
 git clone https://github.com/flakeman/team-cli-tracker.git
 cd team-cli-tracker
-cp deploy/cluster.env.example deploy/cluster.env
-```
-
-Edit `deploy/cluster.env` on each node:
-- `NODE_ID` must be unique (`node-1`, `node-2`, `node-3`)
-- `NODE_LISTEN_ADDR` must match the local port
-- `NODE_PEERS` must list the other two nodes
-
-Run bootstrap:
-```bash
-sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
 ```
 
 ## 2) Node-specific config
 
 ### node-1
-Set in `deploy/cluster.env`:
 ```bash
-NODE_ID="node-1"
-NODE_LISTEN_ADDR="/ip4/0.0.0.0/tcp/4101"
-NODE_PEERS="node-2,node-3"
+cp deploy/cluster.node-1.env.example deploy/cluster.env
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
 ```
 Generate config:
 ```bash
@@ -39,11 +26,9 @@ sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/te
 ```
 
 ### node-2
-Set in `deploy/cluster.env`:
 ```bash
-NODE_ID="node-2"
-NODE_LISTEN_ADDR="/ip4/0.0.0.0/tcp/4102"
-NODE_PEERS="node-1,node-3"
+cp deploy/cluster.node-2.env.example deploy/cluster.env
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
 ```
 Generate config:
 ```bash
@@ -51,11 +36,9 @@ sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/te
 ```
 
 ### node-3
-Set in `deploy/cluster.env`:
 ```bash
-NODE_ID="node-3"
-NODE_LISTEN_ADDR="/ip4/0.0.0.0/tcp/4103"
-NODE_PEERS="node-1,node-2"
+cp deploy/cluster.node-3.env.example deploy/cluster.env
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
 ```
 Generate config:
 ```bash
@@ -92,4 +75,3 @@ git log --oneline -n 5
 git checkout <previous_commit_sha>
 sudo systemctl restart team-cli-tracker
 ```
-
