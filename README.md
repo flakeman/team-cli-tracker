@@ -105,6 +105,7 @@ go run ./cmd/node trust revoke --node-id node-2
 - SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`
 - SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`
 - Security runbook и incident checklist: `docs/SECURITY-RUNBOOK.md`
+- Реестр технического долга: `docs/TECH-DEBT.md`
 - Дорожная карта: `docs/ROADMAP.md`
 - Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Скрипты деплоя: `deploy/README.md`
@@ -223,6 +224,7 @@ go run ./cmd/node trust revoke --node-id node-2
 - Near-term execution SDD: `docs/SDD-02-near-term-execution-plan.md`
 - Security and team lifecycle SDD: `docs/SDD-03-security-and-team-lifecycle.md`
 - Security runbook and incident checklist: `docs/SECURITY-RUNBOOK.md`
+- Technical debt register: `docs/TECH-DEBT.md`
 - Delivery roadmap: `docs/ROADMAP.md`
 - 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Deploy scripts: `deploy/README.md`
