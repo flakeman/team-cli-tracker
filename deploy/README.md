@@ -14,6 +14,7 @@
 - `bootstrap-debian13.sh` - базовая подготовка ОС + установка Go + clone/update репозитория.
 - `gen-node-config.sh` - создает `configs/node-<id>.yaml` из env-переменных.
 - `install-systemd-service.sh` - ставит и запускает `team-cli-tracker.service`.
+- `pki-manage.sh` - базовая автоматизация PKI: init CA, issue/revoke node cert, CRL.
 - `RUNBOOK-QUICKSTART-3NODES.md` - точная последовательность команд по нодам.
 
 ### Типовой порядок
@@ -39,6 +40,7 @@ This folder contains helper scripts for a Debian 13 `team-cli-tracker` test clus
 - `bootstrap-debian13.sh` - base OS setup + Go install + repo clone/update.
 - `gen-node-config.sh` - creates `configs/node-<id>.yaml` from env values.
 - `install-systemd-service.sh` - installs and starts `team-cli-tracker.service`.
+- `pki-manage.sh` - basic PKI automation: init CA, issue/revoke node cert, CRL.
 - `RUNBOOK-QUICKSTART-3NODES.md` - exact per-node command sequence.
 
 ### Typical Flow

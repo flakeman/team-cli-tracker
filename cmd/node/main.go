@@ -6,11 +6,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -20,6 +23,7 @@ import (
 	"time"
 
 	"github.com/vladimir/team-cli-tracker/internal/audit"
+	authstore "github.com/vladimir/team-cli-tracker/internal/auth"
 	"github.com/vladimir/team-cli-tracker/internal/events"
 	"github.com/vladimir/team-cli-tracker/internal/governance"
 	"github.com/vladimir/team-cli-tracker/internal/node"
@@ -48,6 +52,8 @@ func main() {
 		runTeam(os.Args[2:])
 	case "trust":
 		runTrust(os.Args[2:])
+	case "auth":
+		runAuth(os.Args[2:])
 	default:
 		printUsage()
 	}
@@ -190,7 +196,7 @@ func runBoard(args []string) {
 
 func runStorage(args []string) {
 	if len(args) < 1 {
-		fmt.Println("storage commands: migrate | enable-encryption | rotate-key | verify-integrity")
+		fmt.Println("storage commands: migrate | enable-encryption | rotate-key | verify-integrity | key-policy-check | recovery-drill")
 		return
 	}
 	switch args[0] {
@@ -214,18 +220,36 @@ func runStorage(args []string) {
 		if err != nil {
 			fatal(err)
 		}
+		if am, err := audit.Open(*dataDir); err == nil {
+			am.Append("storage.key.enable", "local-cli", "ok", map[string]any{"active_key_id": keyID})
+		}
 		fmt.Printf("ok: encryption enabled active_key_id=%s\n", keyID)
 	case "rotate-key":
 		fs := flag.NewFlagSet("storage rotate-key", flag.ExitOnError)
 		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		maxAge := fs.Duration("max-age", mustDuration(envOr("KEY_ROTATION_MAX_AGE", "720h"), 720*time.Hour), "rotation policy max key age")
+		enforceDue := fs.Bool("enforce-due", envOr("ENFORCE_KEY_ROTATION_DUE", "false") == "true", "fail if key is not yet due by policy")
 		_ = fs.Parse(args[1:])
 		logDB, err := store.Open(*dataDir)
 		if err != nil {
 			fatal(err)
 		}
+		if *enforceDue {
+			if _, createdAt, enabled, err := logDB.ActiveEncryptionKeyInfo(); err == nil && enabled && *maxAge > 0 {
+				if time.Since(createdAt) < *maxAge {
+					fatal(fmt.Errorf("key rotation not due yet (age=%s, max=%s)", time.Since(createdAt).Truncate(time.Second), maxAge.String()))
+				}
+			}
+		}
 		keyID, err := logDB.RotateEncryptionKey()
 		if err != nil {
 			fatal(err)
+		}
+		if am, err := audit.Open(*dataDir); err == nil {
+			am.Append("storage.key.rotate", "local-cli", "ok", map[string]any{
+				"active_key_id": keyID,
+				"enforce_due":   *enforceDue,
+			})
 		}
 		fmt.Printf("ok: encryption key rotated active_key_id=%s\n", keyID)
 	case "verify-integrity":
@@ -240,8 +264,69 @@ func runStorage(args []string) {
 			fatal(err)
 		}
 		fmt.Println("ok: event chain integrity verified")
+	case "key-policy-check":
+		fs := flag.NewFlagSet("storage key-policy-check", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		maxAge := fs.Duration("max-age", mustDuration(envOr("KEY_ROTATION_MAX_AGE", "720h"), 720*time.Hour), "rotation policy max key age")
+		_ = fs.Parse(args[1:])
+		logDB, err := store.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		keyID, createdAt, enabled, err := logDB.ActiveEncryptionKeyInfo()
+		if err != nil {
+			fatal(err)
+		}
+		if !enabled {
+			fmt.Println("ok: encryption is not enabled")
+			return
+		}
+		age := time.Since(createdAt)
+		due := *maxAge > 0 && age >= *maxAge
+		if am, err := audit.Open(*dataDir); err == nil {
+			am.Append("storage.key.policy_check", "local-cli", "ok", map[string]any{
+				"active_key_id": keyID,
+				"key_age_sec":   int(age.Seconds()),
+				"max_age_sec":   int(maxAge.Seconds()),
+				"rotation_due":  due,
+			})
+		}
+		fmt.Printf("active_key_id=%s\ncreated_at=%s\nkey_age=%s\nmax_age=%s\nrotation_due=%v\n", keyID, createdAt.Format(time.RFC3339), age.Truncate(time.Second), maxAge.String(), due)
+	case "recovery-drill":
+		fs := flag.NewFlagSet("storage recovery-drill", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		logDB, err := store.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		before, err := logDB.ReadAll()
+		if err != nil {
+			fatal(err)
+		}
+		if _, err := logDB.EnableEncryption(); err != nil {
+			fatal(err)
+		}
+		keyID, err := logDB.RotateEncryptionKey()
+		if err != nil {
+			fatal(err)
+		}
+		after, err := logDB.ReadAll()
+		if err != nil {
+			fatal(err)
+		}
+		if len(before) != len(after) {
+			fatal(fmt.Errorf("recovery drill failed: event count mismatch before=%d after=%d", len(before), len(after)))
+		}
+		if am, err := audit.Open(*dataDir); err == nil {
+			am.Append("storage.key.recovery_drill", "local-cli", "ok", map[string]any{
+				"active_key_id": keyID,
+				"events_checked": len(after),
+			})
+		}
+		fmt.Printf("ok: recovery drill passed active_key_id=%s events_checked=%d\n", keyID, len(after))
 	default:
-		fmt.Println("storage commands: migrate | enable-encryption | rotate-key | verify-integrity")
+		fmt.Println("storage commands: migrate | enable-encryption | rotate-key | verify-integrity | key-policy-check | recovery-drill")
 	}
 }
 
@@ -391,6 +476,80 @@ func runTeam(args []string) {
 	}
 }
 
+func runAuth(args []string) {
+	if len(args) < 1 {
+		fmt.Println("auth commands: issue | revoke | list | bind-role | list-bindings")
+		return
+	}
+	switch args[0] {
+	case "issue":
+		fs := flag.NewFlagSet("auth issue", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		userID := fs.String("user-id", "", "user id")
+		role := fs.String("role", "", "role")
+		ttlSec := fs.Int("ttl-sec", 3600, "token ttl in seconds")
+		_ = fs.Parse(args[1:])
+		m, err := authstore.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		rec, err := m.Issue(*userID, *role, time.Duration(*ttlSec)*time.Second)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("token=%s\nuser_id=%s\nrole=%s\nexpires_at=%s\n", rec.Token, rec.UserID, rec.Role, rec.ExpiresAt)
+	case "revoke":
+		fs := flag.NewFlagSet("auth revoke", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		token := fs.String("token", "", "token")
+		_ = fs.Parse(args[1:])
+		m, err := authstore.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := m.Revoke(*token); err != nil {
+			fatal(err)
+		}
+		fmt.Println("ok: token revoked")
+	case "list":
+		fs := flag.NewFlagSet("auth list", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		m, err := authstore.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		raw, _ := json.MarshalIndent(map[string]any{"tokens": m.ListTokens()}, "", "  ")
+		fmt.Println(string(raw))
+	case "bind-role":
+		fs := flag.NewFlagSet("auth bind-role", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		userID := fs.String("user-id", "", "user id")
+		role := fs.String("role", "", "role")
+		_ = fs.Parse(args[1:])
+		m, err := authstore.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := m.SetRoleBinding(*userID, *role); err != nil {
+			fatal(err)
+		}
+		fmt.Println("ok: role binding updated")
+	case "list-bindings":
+		fs := flag.NewFlagSet("auth list-bindings", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		m, err := authstore.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		raw, _ := json.MarshalIndent(map[string]any{"role_bindings": m.ListRoleBindings()}, "", "  ")
+		fmt.Println(string(raw))
+	default:
+		fmt.Println("auth commands: issue | revoke | list | bind-role | list-bindings")
+	}
+}
+
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
@@ -403,14 +562,22 @@ func runServe(args []string) {
 	authEnabled := fs.Bool("auth-enabled", envOr("AUTH_ENABLED", "false") == "true", "enable token auth")
 	authTokensJSON := fs.String("auth-tokens-json", envOr("AUTH_TOKENS_JSON", ""), "auth token map json")
 	peerToken := fs.String("peer-token", envOr("PEER_TOKEN", ""), "outgoing peer bearer token")
+	publicURL := fs.String("public-url", envOr("PUBLIC_URL", ""), "public base URL advertised to peers, e.g. http://node-1:4101")
 	tlsCert := fs.String("tls-cert", envOr("TLS_CERT_FILE", ""), "server TLS cert file")
 	tlsKey := fs.String("tls-key", envOr("TLS_KEY_FILE", ""), "server TLS key file")
 	tlsCA := fs.String("tls-ca", envOr("TLS_CA_FILE", ""), "CA file for mTLS and client trust")
+	tlsCRL := fs.String("tls-crl", envOr("TLS_CRL_FILE", ""), "CRL file for revoked client certificates (optional)")
 	mtlsRequired := fs.Bool("mtls-required", envOr("MTLS_REQUIRED", "false") == "true", "require and verify client cert")
 	clientCert := fs.String("client-cert", envOr("CLIENT_TLS_CERT_FILE", ""), "client cert for outgoing peer requests")
 	clientKey := fs.String("client-key", envOr("CLIENT_TLS_KEY_FILE", ""), "client key for outgoing peer requests")
+	secureModeRequired := fs.Bool("secure-mode-required", envOr("SECURE_MODE_REQUIRED", "true") == "true", "hard-fail startup when secure transport/auth requirements are unmet")
 	rateLimitPerMin := fs.Int("rate-limit-per-min", mustAtoi(envOr("RATE_LIMIT_PER_MIN", "120")), "per-token or per-ip requests per minute")
+	rateLimitSensitivePerMin := fs.Int("rate-limit-sensitive-per-min", mustAtoi(envOr("RATE_LIMIT_SENSITIVE_PER_MIN", "30")), "per-token or per-ip requests per minute for sensitive endpoints")
 	tick := fs.Duration("sync-tick", 3*time.Second, "sync interval")
+	discoveryEnabled := fs.Bool("discovery-enabled", envOr("DISCOVERY_ENABLED", "true") == "true", "enable peer discovery from /sync/peers")
+	discoveryTTL := fs.Duration("discovery-ttl", mustDuration(envOr("DISCOVERY_TTL", "45s"), 45*time.Second), "ttl for discovered peers before prune")
+	enforceKeyRotationPolicy := fs.Bool("enforce-key-rotation-policy", envOr("ENFORCE_KEY_ROTATION_POLICY", "true") == "true", "hard-fail startup if active encryption key exceeds max age")
+	keyRotationMaxAge := fs.Duration("key-rotation-max-age", mustDuration(envOr("KEY_ROTATION_MAX_AGE", "720h"), 720*time.Hour), "maximum allowed active encryption key age before startup fails")
 	_ = fs.Parse(args)
 
 	id, err := node.LoadOrCreate(*dataDir, *nodeID)
@@ -421,12 +588,38 @@ func runServe(args []string) {
 	if err != nil {
 		fatal(err)
 	}
+	if *enforceKeyRotationPolicy {
+		keyID, createdAt, enabled, err := log.ActiveEncryptionKeyInfo()
+		if err != nil {
+			fatal(fmt.Errorf("encryption key policy check failed: %w", err))
+		}
+		if enabled && *keyRotationMaxAge > 0 {
+			age := time.Since(createdAt)
+			if age > *keyRotationMaxAge {
+				fatal(fmt.Errorf("active encryption key %s age=%s exceeds max=%s; rotate key before starting", keyID, age.Truncate(time.Second), keyRotationMaxAge.String()))
+			}
+		}
+	}
 	peers := parsePeers(*peersCSV)
 	tokenMap, err := parseAuthTokens(*authTokensJSON)
 	if err != nil {
 		fatal(err)
 	}
-	serverTLS, err := buildServerTLSConfig(*tlsCA, *mtlsRequired)
+	if err := validateServeSecurityPolicy(serveSecurityPolicyInput{
+		SecureModeRequired: *secureModeRequired,
+		AuthEnabled:        *authEnabled,
+		HasPeers:           len(peers) > 0,
+		TLSCert:            *tlsCert,
+		TLSKey:             *tlsKey,
+		TLSCA:              *tlsCA,
+		MTLSRequired:       *mtlsRequired,
+		ClientCert:         *clientCert,
+		ClientKey:          *clientKey,
+		PeerToken:          *peerToken,
+	}); err != nil {
+		fatal(err)
+	}
+	serverTLS, err := buildServerTLSConfig(*tlsCA, *tlsCRL, *mtlsRequired)
 	if err != nil {
 		fatal(err)
 	}
@@ -436,6 +629,21 @@ func runServe(args []string) {
 	}
 	trustManager, err := trust.Open(*dataDir)
 	if err != nil {
+		fatal(err)
+	}
+	authManager, err := authstore.Open(*dataDir)
+	if err != nil {
+		fatal(err)
+	}
+	staticSeed := make(map[string]authstore.Principal, len(tokenMap))
+	for tok, p := range tokenMap {
+		staticSeed[tok] = authstore.Principal{
+			UserID: p.UserID,
+			Role:   p.Role,
+			Active: p.Active,
+		}
+	}
+	if err := authManager.SeedStatic(staticSeed); err != nil {
 		fatal(err)
 	}
 	if err := trustManager.TrustNode(id.NodeID); err != nil {
@@ -457,22 +665,30 @@ func runServe(args []string) {
 		fatal(err)
 	}
 	s := &syncServer{
-		projectID:       *projectID,
-		nodeID:          id.NodeID,
-		log:             log,
-		peers:           peers,
-		nodeRole:        strings.ToLower(strings.TrimSpace(*nodeRole)),
-		preferredLeader: strings.TrimSpace(*preferredLeader),
-		authEnabled:     *authEnabled,
-		authTokens:      tokenMap,
-		httpClient:      httpClient,
-		peerToken:       strings.TrimSpace(*peerToken),
-		trustManager:    trustManager,
-		teamManager:     teamManager,
-		identity:        id,
-		govManager:      govManager,
-		auditManager:    auditManager,
-		rateLimiter:     newSimpleRateLimiter(*rateLimitPerMin),
+		projectID:            *projectID,
+		nodeID:               id.NodeID,
+		log:                  log,
+		peers:                peers,
+		nodeRole:             strings.ToLower(strings.TrimSpace(*nodeRole)),
+		preferredLeader:      strings.TrimSpace(*preferredLeader),
+		authEnabled:          *authEnabled,
+		authTokens:           tokenMap,
+		authManager:          authManager,
+		httpClient:           httpClient,
+		peerToken:            strings.TrimSpace(*peerToken),
+		publicURL:            normalizePeerURL(*publicURL),
+		discoveryEnabled:     *discoveryEnabled,
+		discoveryTTL:         *discoveryTTL,
+		trustManager:         trustManager,
+		teamManager:          teamManager,
+		identity:             id,
+		govManager:           govManager,
+		auditManager:         auditManager,
+		rateLimiter:          newSimpleRateLimiter(*rateLimitPerMin),
+		sensitiveRateLimiter: newSimpleRateLimiter(*rateLimitSensitivePerMin),
+		peerSync:             map[string]peerSyncState{},
+		discoveredPeers:      map[string]int64{},
+		peerNodeByURL:        map[string]string{},
 	}
 
 	mux := http.NewServeMux()
@@ -480,16 +696,23 @@ func runServe(args []string) {
 	mux.HandleFunc("/sync/clock", s.withAuthAny(s.syncClock))
 	mux.HandleFunc("/sync/events", s.withAuthAny(s.syncEvents))
 	mux.HandleFunc("/sync/ingest", s.withAuthAny(s.syncIngest))
+	mux.HandleFunc("/sync/peers", s.withAuthAny(s.syncPeers))
 	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-team-onboard", s.withAuthRoles(s.raftVoteTeamOnboard, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-team-onboard", s.withAuthRoles(s.raftValidateTeamOnboard, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-team-role-change", s.withAuthRoles(s.raftVoteTeamRoleChange, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-team-role-change", s.withAuthRoles(s.raftValidateTeamRoleChange, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-trust-invite", s.withAuthRoles(s.raftVoteTrustInvite, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-trust-invite", s.withAuthRoles(s.raftValidateTrustInvite, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-trust-revoke", s.withAuthRoles(s.raftVoteTrustRevoke, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-trust-revoke", s.withAuthRoles(s.raftValidateTrustRevoke, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-governance-node-role", s.withAuthRoles(s.raftVoteGovernanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-governance-node-role", s.withAuthRoles(s.raftValidateGovernanceNodeRole, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
@@ -503,6 +726,11 @@ func runServe(args []string) {
 	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
 	mux.HandleFunc("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
+	mux.HandleFunc("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
+	mux.HandleFunc("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
+	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
+	mux.HandleFunc("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
+	mux.HandleFunc("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -519,25 +747,47 @@ func runServe(args []string) {
 }
 
 type syncServer struct {
-	projectID       string
-	nodeID          string
-	log             *store.EventLog
-	peers           []string
-	nodeRole        string
-	preferredLeader string
-	pulledEvents    uint64
-	pullErrors      uint64
-	lastSyncUnix    int64
-	authEnabled     bool
-	authTokens      map[string]authPrincipal
-	httpClient      *http.Client
-	peerToken       string
-	trustManager    *trust.Manager
-	teamManager     *team.Manager
-	identity        node.Identity
-	govManager      *governance.Manager
-	auditManager    *audit.Manager
-	rateLimiter     *simpleRateLimiter
+	projectID            string
+	nodeID               string
+	log                  *store.EventLog
+	peers                []string
+	nodeRole             string
+	preferredLeader      string
+	pulledEvents         uint64
+	pullErrors           uint64
+	lastSyncUnix         int64
+	authEnabled          bool
+	authTokens           map[string]authPrincipal
+	authManager          *authstore.Manager
+	httpClient           *http.Client
+	peerToken            string
+	publicURL            string
+	discoveryEnabled     bool
+	discoveryTTL         time.Duration
+	trustManager         *trust.Manager
+	teamManager          *team.Manager
+	identity             node.Identity
+	govManager           *governance.Manager
+	auditManager         *audit.Manager
+	rateLimiter          *simpleRateLimiter
+	sensitiveRateLimiter *simpleRateLimiter
+	rateLimitDenied      atomic.Uint64
+	rateLimitDeniedDefault atomic.Uint64
+	rateLimitDeniedSensitive atomic.Uint64
+	authnDenied          atomic.Uint64
+	authzDenied          atomic.Uint64
+	syncPeerPulls        atomic.Uint64
+	syncPeerPullSuccess  atomic.Uint64
+	syncPeerSkippedBackoff atomic.Uint64
+	peerMu               sync.Mutex
+	peerSync             map[string]peerSyncState
+	discoveredPeers      map[string]int64
+	peerNodeByURL        map[string]string
+}
+
+type peerSyncState struct {
+	ConsecutiveFailures int
+	BackoffUntilUnix    int64
 }
 
 type transitionRequest struct {
@@ -555,6 +805,27 @@ type governanceReconfigureRequest struct {
 type teamOffboardRequest struct {
 	ProjectID string `json:"project_id"`
 	UserID    string `json:"user_id"`
+}
+
+type teamOnboardRequest struct {
+	ProjectID string `json:"project_id"`
+	UserID    string `json:"user_id"`
+	Role      string `json:"role"`
+	Duty      bool   `json:"duty"`
+}
+
+type teamRoleChangeRequest struct {
+	ProjectID string `json:"project_id"`
+	UserID    string `json:"user_id"`
+	Role      string `json:"role"`
+	Duty      bool   `json:"duty"`
+}
+
+type governanceNodeRoleRequest struct {
+	ProjectID string `json:"project_id"`
+	NodeID    string `json:"node_id"`
+	Role      string `json:"role"`
+	Active    bool   `json:"active"`
 }
 
 type trustInviteRequest struct {
@@ -610,6 +881,15 @@ func (s *syncServer) syncEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": items})
+}
+
+func (s *syncServer) syncPeers(w http.ResponseWriter, _ *http.Request) {
+	peers := s.activeSyncPeers()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node_id":    s.nodeID,
+		"public_url": s.publicURL,
+		"peers":      peers,
+	})
 }
 
 func (s *syncServer) syncIngest(w http.ResponseWriter, r *http.Request) {
@@ -885,23 +1165,50 @@ func (s *syncServer) teamOnboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		UserID string `json:"user_id"`
-		Role   string `json:"role"`
-		Duty   bool   `json:"duty"`
-	}
+	var in teamOnboardRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
 		return
 	}
 	if in.Role == "" {
 		in.Role = "viewer"
 	}
+	granted, needed, preferredOnline, ok := s.validateTeamOnboardWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
+		return
+	}
 	if err := s.teamManager.Onboard(team.Member{UserID: in.UserID, Role: in.Role, Duty: in.Duty, Active: true}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.auditManager.Append("team.onboard", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "role": in.Role})
+	s.auditManager.Append("team.onboard", s.actorFromReq(r), "ok", map[string]any{
+		"user_id":            in.UserID,
+		"role":               in.Role,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusCreated, map[string]any{"status": "onboarded", "user_id": in.UserID, "role": in.Role, "duty": in.Duty})
 }
 
@@ -910,20 +1217,48 @@ func (s *syncServer) teamRoleChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		UserID string `json:"user_id"`
-		Role   string `json:"role"`
-		Duty   bool   `json:"duty"`
-	}
+	var in teamRoleChangeRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Role) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTeamRoleChangeWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
 		return
 	}
 	if err := s.teamManager.ChangeRole(in.UserID, in.Role, in.Duty); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.auditManager.Append("team.role_change", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "role": in.Role, "duty": in.Duty})
+	s.auditManager.Append("team.role_change", s.actorFromReq(r), "ok", map[string]any{
+		"user_id":            in.UserID,
+		"role":               in.Role,
+		"duty":               in.Duty,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "role_changed", "user_id": in.UserID, "role": in.Role, "duty": in.Duty})
 }
 
@@ -1046,6 +1381,116 @@ func (s *syncServer) raftValidateTeamOffboard(w http.ResponseWriter, r *http.Req
 	})
 }
 
+func (s *syncServer) raftVoteTeamOnboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in teamOnboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "user_id is required", "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateTeamOnboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in teamOnboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "user_id is required", "granted": 0, "needed": quorumNeeded(len(s.peers) + 1)})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTeamOnboardWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "quorum not reached", "granted": granted, "needed": needed})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
+}
+
+func (s *syncServer) raftVoteTeamRoleChange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in teamRoleChangeRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "user_id and role are required", "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateTeamRoleChange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in teamRoleChangeRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "user_id and role are required", "granted": 0, "needed": quorumNeeded(len(s.peers) + 1)})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTeamRoleChangeWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "quorum not reached", "granted": granted, "needed": needed})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
+}
+
 func (s *syncServer) validateTeamOffboardWithQuorum(in teamOffboardRequest) (granted, needed int, preferredOnline bool, ok bool) {
 	granted = 1
 	totalNodes := len(s.peers) + 1
@@ -1056,6 +1501,46 @@ func (s *syncServer) validateTeamOffboardWithQuorum(in teamOffboardRequest) (gra
 	}
 	for _, peer := range s.peers {
 		allow, voterID, _ := requestTeamOffboardVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
+}
+
+func (s *syncServer) validateTeamOnboardWithQuorum(in teamOnboardRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestTeamOnboardVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
+}
+
+func (s *syncServer) validateTeamRoleChangeWithQuorum(in teamRoleChangeRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestTeamRoleChangeVote(s.getHTTPClient(), s.peerToken, peer, in)
 		if allow {
 			granted++
 		}
@@ -1119,20 +1604,48 @@ func (s *syncServer) governanceNodeRole(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		NodeID string `json:"node_id"`
-		Role   string `json:"role"`
-		Active bool   `json:"active"`
-	}
+	var in governanceNodeRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.NodeID) == "" || strings.TrimSpace(in.Role) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateGovernanceNodeRoleWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
 		return
 	}
 	if err := s.govManager.SetNodeRole(strings.TrimSpace(in.NodeID), strings.TrimSpace(in.Role), in.Active); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.auditManager.Append("governance.node_role", s.actorFromReq(r), "ok", map[string]any{"node_id": in.NodeID, "role": in.Role, "active": in.Active})
+	s.auditManager.Append("governance.node_role", s.actorFromReq(r), "ok", map[string]any{
+		"node_id":            in.NodeID,
+		"role":               in.Role,
+		"active":             in.Active,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "updated"})
 }
 
@@ -1147,6 +1660,61 @@ func (s *syncServer) governanceList(w http.ResponseWriter, r *http.Request) {
 		"nodes":        nodes,
 		"voting_count": voting,
 		"quorum":       quorumNeeded(voting),
+	})
+}
+
+func (s *syncServer) raftVoteGovernanceNodeRole(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in governanceNodeRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.NodeID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "node_id and role are required", "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateGovernanceNodeRole(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in governanceNodeRoleRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.NodeID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "node_id and role are required", "granted": 0, "needed": quorumNeeded(len(s.peers) + 1)})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateGovernanceNodeRoleWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "quorum not reached", "granted": granted, "needed": needed})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
 	})
 }
 
@@ -1291,6 +1859,26 @@ func (s *syncServer) validateGovernanceReconfigureWithQuorum(in governanceReconf
 	return granted, needed, preferredOnline, granted >= needed
 }
 
+func (s *syncServer) validateGovernanceNodeRoleWithQuorum(in governanceNodeRoleRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestGovernanceNodeRoleVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
+}
+
 func (s *syncServer) securityAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1308,6 +1896,106 @@ func (s *syncServer) securityAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": items})
+}
+
+func (s *syncServer) authIssue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.authManager == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "auth manager is not configured"})
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+		TTLSec int    `json:"ttl_sec"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.TTLSec == 0 {
+		in.TTLSec = 3600
+	}
+	rec, err := s.authManager.Issue(strings.TrimSpace(in.UserID), strings.TrimSpace(in.Role), time.Duration(in.TTLSec)*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, rec)
+}
+
+func (s *syncServer) authRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.authManager == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "auth manager is not configured"})
+		return
+	}
+	var in struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Token) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.authManager.Revoke(strings.TrimSpace(in.Token)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+}
+
+func (s *syncServer) authList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.authManager == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "auth manager is not configured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": s.authManager.ListTokens()})
+}
+
+func (s *syncServer) authBindRole(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.authManager == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "auth manager is not configured"})
+		return
+	}
+	var in struct {
+		UserID string `json:"user_id"`
+		Role   string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" || strings.TrimSpace(in.Role) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.authManager.SetRoleBinding(strings.TrimSpace(in.UserID), strings.TrimSpace(in.Role)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (s *syncServer) authListBindings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.authManager == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "auth manager is not configured"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"role_bindings": s.authManager.ListRoleBindings()})
 }
 
 func (s *syncServer) raftVoteTransition(w http.ResponseWriter, r *http.Request) {
@@ -1398,11 +2086,22 @@ func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 	if last > 0 {
 		lastSyncAt = time.Unix(last, 0).UTC().Format(time.RFC3339)
 	}
+	now := time.Now().UTC()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"node_id":       s.nodeID,
 		"project_id":    s.projectID,
 		"pulled_events": atomic.LoadUint64(&s.pulledEvents),
 		"pull_errors":   atomic.LoadUint64(&s.pullErrors),
+		"sync_peer_pulls": s.syncPeerPulls.Load(),
+		"sync_peer_pull_success": s.syncPeerPullSuccess.Load(),
+		"sync_peer_skipped_backoff": s.syncPeerSkippedBackoff.Load(),
+		"sync_peer_backoff_active": s.peerBackoffActive(now),
+		"sync_discovered_peers": s.discoveredPeerCount(),
+		"rate_limit_denied_total": s.rateLimitDenied.Load(),
+		"rate_limit_denied_default": s.rateLimitDeniedDefault.Load(),
+		"rate_limit_denied_sensitive": s.rateLimitDeniedSensitive.Load(),
+		"authn_denied_total": s.authnDenied.Load(),
+		"authz_denied_total": s.authzDenied.Load(),
 		"last_sync_at":  lastSyncAt,
 	})
 }
@@ -1411,31 +2110,49 @@ func (s *syncServer) syncLoop(interval time.Duration) {
 	if interval <= 0 {
 		interval = 3 * time.Second
 	}
+	if s.discoveryTTL <= 0 {
+		s.discoveryTTL = 45 * time.Second
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for range t.C {
-		for _, peer := range s.peers {
-			s.pullFromPeer(peer)
+		tickNow := time.Now().UTC()
+		for _, peer := range s.activeSyncPeers() {
+			now := time.Now().UTC()
+			if !s.shouldPullPeer(peer, now) {
+				s.syncPeerSkippedBackoff.Add(1)
+				continue
+			}
+			ok := s.pullFromPeer(peer)
+			s.recordPeerPullResult(peer, ok, time.Now().UTC())
+		}
+		if s.discoveryEnabled {
+			s.refreshDiscoveredPeers(tickNow)
+			s.pruneDiscoveredPeers(tickNow)
 		}
 	}
 }
 
-func (s *syncServer) pullFromPeer(peer string) {
+func (s *syncServer) pullFromPeer(peer string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	atomic.StoreInt64(&s.lastSyncUnix, time.Now().Unix())
+	s.syncPeerPulls.Add(1)
+	hadErr := false
 
 	remoteClock, err := s.fetchClock(ctx, peer, s.projectID)
 	if err != nil {
 		atomic.AddUint64(&s.pullErrors, 1)
+		hadErr = true
 		log.Printf("sync clock error peer=%s err=%v", peer, err)
-		return
+		return false
 	}
 	localClock, err := s.log.Clock(s.projectID)
 	if err != nil {
 		atomic.AddUint64(&s.pullErrors, 1)
+		hadErr = true
 		log.Printf("sync local clock error peer=%s err=%v", peer, err)
-		return
+		return false
 	}
 	for signerID, remoteSeq := range remoteClock {
 		localSeq := localClock[signerID]
@@ -1445,6 +2162,7 @@ func (s *syncServer) pullFromPeer(peer string) {
 		items, err := s.fetchEvents(ctx, peer, s.projectID, signerID, localSeq)
 		if err != nil {
 			atomic.AddUint64(&s.pullErrors, 1)
+			hadErr = true
 			log.Printf("sync fetch events error peer=%s signer=%s err=%v", peer, signerID, err)
 			continue
 		}
@@ -1452,6 +2170,7 @@ func (s *syncServer) pullFromPeer(peer string) {
 		for _, e := range items {
 			if err := events.VerifyByEventKey(e); err != nil {
 				atomic.AddUint64(&s.pullErrors, 1)
+				hadErr = true
 				log.Printf("sync verify event error peer=%s signer=%s seq=%d err=%v", peer, e.SignerID, e.Seq, err)
 				continue
 			}
@@ -1460,6 +2179,238 @@ func (s *syncServer) pullFromPeer(peer string) {
 			}
 		}
 	}
+	if !hadErr {
+		s.syncPeerPullSuccess.Add(1)
+	}
+	return !hadErr
+}
+
+func (s *syncServer) shouldPullPeer(peer string, now time.Time) bool {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.peerSync == nil {
+		return true
+	}
+	st, ok := s.peerSync[peer]
+	if !ok {
+		return true
+	}
+	return st.BackoffUntilUnix <= now.Unix()
+}
+
+func (s *syncServer) recordPeerPullResult(peer string, ok bool, now time.Time) {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.peerSync == nil {
+		s.peerSync = make(map[string]peerSyncState)
+	}
+	st := s.peerSync[peer]
+	if ok {
+		st.ConsecutiveFailures = 0
+		st.BackoffUntilUnix = 0
+		s.peerSync[peer] = st
+		return
+	}
+	st.ConsecutiveFailures++
+	delaySec := 1 << minInt(st.ConsecutiveFailures-1, 6) // 1s,2s,4s,... max 64s
+	st.BackoffUntilUnix = now.Add(time.Duration(delaySec) * time.Second).Unix()
+	s.peerSync[peer] = st
+}
+
+func (s *syncServer) peerBackoffActive(now time.Time) int {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if len(s.peerSync) == 0 {
+		return 0
+	}
+	out := 0
+	for _, st := range s.peerSync {
+		if st.BackoffUntilUnix > now.Unix() {
+			out++
+		}
+	}
+	return out
+}
+
+func (s *syncServer) activeSyncPeers() []string {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	out := make([]string, 0, len(s.peers)+len(s.discoveredPeers))
+	seen := map[string]struct{}{}
+	for _, p := range s.peers {
+		n := normalizePeerURL(p)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	nowUnix := time.Now().UTC().Unix()
+	for p, seenAt := range s.discoveredPeers {
+		if seenAt <= 0 || nowUnix-seenAt > int64(s.discoveryTTL.Seconds()) {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func (s *syncServer) discoveredPeerCount() int {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	return len(s.discoveredPeers)
+}
+
+func (s *syncServer) refreshDiscoveredPeers(now time.Time) {
+	sources := s.activeSyncPeers()
+	for _, source := range sources {
+		peerNodeID, peers, err := s.fetchPeerSnapshot(source)
+		if err != nil {
+			continue
+		}
+		if peerNodeID != "" {
+			s.recordPeerIdentity(source, peerNodeID)
+			if s.trustManager != nil && !s.trustManager.IsTrusted(peerNodeID) {
+				s.removeDiscoveredPeer(source)
+				continue
+			}
+		}
+		for _, candidate := range peers {
+			candidate = normalizePeerURL(candidate)
+			if candidate == "" || candidate == source {
+				continue
+			}
+			nodeID, err := s.fetchHealthNodeID(candidate)
+			if err != nil || strings.TrimSpace(nodeID) == "" {
+				continue
+			}
+			if s.trustManager != nil && !s.trustManager.IsTrusted(nodeID) {
+				s.removeDiscoveredPeer(candidate)
+				continue
+			}
+			s.addDiscoveredPeer(candidate, nodeID, now)
+		}
+	}
+}
+
+func (s *syncServer) pruneDiscoveredPeers(now time.Time) {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.discoveredPeers == nil {
+		return
+	}
+	ttlSec := int64(s.discoveryTTL.Seconds())
+	if ttlSec <= 0 {
+		ttlSec = 45
+	}
+	nowUnix := now.Unix()
+	for peer, seenAt := range s.discoveredPeers {
+		if nowUnix-seenAt > ttlSec {
+			delete(s.discoveredPeers, peer)
+			delete(s.peerNodeByURL, peer)
+			delete(s.peerSync, peer)
+			continue
+		}
+		if s.trustManager != nil {
+			if nodeID := strings.TrimSpace(s.peerNodeByURL[peer]); nodeID != "" && !s.trustManager.IsTrusted(nodeID) {
+				delete(s.discoveredPeers, peer)
+				delete(s.peerNodeByURL, peer)
+				delete(s.peerSync, peer)
+			}
+		}
+	}
+}
+
+func (s *syncServer) fetchPeerSnapshot(peerBaseURL string) (string, []string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(peerBaseURL, "/")+"/sync/peers", nil)
+	if err != nil {
+		return "", nil, err
+	}
+	s.attachAuth(req, s.peerToken)
+	res, err := s.getHTTPClient().Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return "", nil, fmt.Errorf("sync peers status=%d", res.StatusCode)
+	}
+	var out struct {
+		NodeID    string   `json:"node_id"`
+		PublicURL string   `json:"public_url"`
+		Peers     []string `json:"peers"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return "", nil, err
+	}
+	if u := normalizePeerURL(out.PublicURL); u != "" {
+		out.Peers = append(out.Peers, u)
+	}
+	return strings.TrimSpace(out.NodeID), out.Peers, nil
+}
+
+func (s *syncServer) fetchHealthNodeID(peerBaseURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(peerBaseURL, "/")+"/healthz", nil)
+	if err != nil {
+		return "", err
+	}
+	s.attachAuth(req, s.peerToken)
+	res, err := s.getHTTPClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return "", fmt.Errorf("health status=%d", res.StatusCode)
+	}
+	var out struct {
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.NodeID), nil
+}
+
+func (s *syncServer) addDiscoveredPeer(peerURL, nodeID string, now time.Time) {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.discoveredPeers == nil {
+		s.discoveredPeers = map[string]int64{}
+	}
+	if s.peerNodeByURL == nil {
+		s.peerNodeByURL = map[string]string{}
+	}
+	s.discoveredPeers[peerURL] = now.Unix()
+	s.peerNodeByURL[peerURL] = strings.TrimSpace(nodeID)
+}
+
+func (s *syncServer) removeDiscoveredPeer(peerURL string) {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	delete(s.discoveredPeers, peerURL)
+	delete(s.peerNodeByURL, peerURL)
+	delete(s.peerSync, peerURL)
+}
+
+func (s *syncServer) recordPeerIdentity(peerURL, nodeID string) {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.peerNodeByURL == nil {
+		s.peerNodeByURL = map[string]string{}
+	}
+	s.peerNodeByURL[normalizePeerURL(peerURL)] = strings.TrimSpace(nodeID)
 }
 
 func (s *syncServer) fetchClock(ctx context.Context, peerBaseURL, projectID string) (map[string]uint64, error) {
@@ -1560,11 +2511,35 @@ type issueProjection struct {
 }
 
 func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[string][]issueProjection {
-	issues := make(map[string]issueProjection)
+	filtered := make([]events.SignedEvent, 0, len(all))
 	for _, e := range all {
-		if e.ProjectID != projectID {
-			continue
+		if e.ProjectID == projectID {
+			filtered = append(filtered, e)
 		}
+	}
+	// Deterministic replay order: independent from ingestion order after partition/rejoin.
+	sort.Slice(filtered, func(i, j int) bool {
+		a := filtered[i]
+		b := filtered[j]
+		at := a.Timestamp.UTC().UnixNano()
+		bt := b.Timestamp.UTC().UnixNano()
+		if at != bt {
+			return at < bt
+		}
+		if a.SignerID != b.SignerID {
+			return a.SignerID < b.SignerID
+		}
+		if a.Seq != b.Seq {
+			return a.Seq < b.Seq
+		}
+		if a.EntityID != b.EntityID {
+			return a.EntityID < b.EntityID
+		}
+		return a.Type < b.Type
+	})
+
+	issues := make(map[string]issueProjection)
+	for _, e := range filtered {
 		it := issues[e.EntityID]
 		if it.ID == "" {
 			it = issueProjection{ID: e.EntityID, Status: "todo", Priority: "medium", Comments: make([]string, 0)}
@@ -1675,17 +2650,24 @@ func printUsage() {
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
 	fmt.Println("  node storage enable-encryption [--data-dir ./data]")
-	fmt.Println("  node storage rotate-key [--data-dir ./data]")
+	fmt.Println("  node storage rotate-key [--data-dir ./data] [--enforce-due] [--max-age 720h]")
 	fmt.Println("  node storage verify-integrity [--data-dir ./data]")
+	fmt.Println("  node storage key-policy-check [--data-dir ./data] [--max-age 720h]")
+	fmt.Println("  node storage recovery-drill [--data-dir ./data]")
 	fmt.Println("  node trust invite --node-id node-x [--ttl-sec 3600]")
 	fmt.Println("  node trust use-invite --node-id node-x --token <token>")
 	fmt.Println("  node trust revoke --node-id node-x")
 	fmt.Println("  node trust list")
+	fmt.Println("  node auth issue --user-id u1 [--role dev] [--ttl-sec 3600]")
+	fmt.Println("  node auth revoke --token <token>")
+	fmt.Println("  node auth list")
+	fmt.Println("  node auth bind-role --user-id u1 --role lead")
+	fmt.Println("  node auth list-bindings")
 	fmt.Println("  node team onboard --user-id u1 --role dev [--duty]")
 	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
 	fmt.Println("  node team offboard --project-id OPS --user-id u1")
 	fmt.Println("  node team list")
-	fmt.Println("  node serve ... [--rate-limit-per-min 120]")
+	fmt.Println("  node serve ... [--rate-limit-per-min 120] [--rate-limit-sensitive-per-min 30] [--discovery-enabled true] [--public-url http://node-1:4101]")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 
@@ -1709,14 +2691,20 @@ func fatal(err error) {
 func parsePeers(csv string) []string {
 	items := strings.Split(csv, ",")
 	out := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
 	for _, v := range items {
 		v = strings.TrimSpace(v)
+		if v != "" && !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			v = "http://" + v
+		}
+		v = normalizePeerURL(v)
 		if v == "" {
 			continue
 		}
-		if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
-			v = "http://" + v
+		if _, ok := seen[v]; ok {
+			continue
 		}
+		seen[v] = struct{}{}
 		out = append(out, v)
 	}
 	return out
@@ -1890,6 +2878,105 @@ func requestTeamOffboardVote(client *http.Client, peerToken, peerBaseURL string,
 		return false, "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-team-offboard", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
+func requestTeamOnboardVote(client *http.Client, peerToken, peerBaseURL string, in teamOnboardRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-team-onboard", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
+func requestTeamRoleChangeVote(client *http.Client, peerToken, peerBaseURL string, in teamRoleChangeRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-team-role-change", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
+func requestGovernanceNodeRoleVote(client *http.Client, peerToken, peerBaseURL string, in governanceNodeRoleRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-governance-node-role", bytes.NewReader(raw))
 	if err != nil {
 		return false, "", err
 	}
@@ -2103,21 +3190,29 @@ func reassignFromEvents(logDB *store.EventLog, id node.Identity, tm *team.Manage
 
 func (s *syncServer) withAuthAny(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.rateLimiter != nil {
-			key := s.rateLimitKey(r)
-			if !s.rateLimiter.Allow(key) {
-				if s.auditManager != nil {
-					s.auditManager.Append("rate_limit", key, "deny", nil)
-				}
-				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
-				return
+		if !s.allowRequest(r) {
+			s.rateLimitDenied.Add(1)
+			switch s.rateLimitTier(r.URL.Path) {
+			case "sensitive":
+				s.rateLimitDeniedSensitive.Add(1)
+			default:
+				s.rateLimitDeniedDefault.Add(1)
 			}
+			if s.auditManager != nil {
+				s.auditManager.Append("rate_limit", s.rateLimitKey(r), "deny", map[string]any{
+					"path": r.URL.Path,
+					"tier": s.rateLimitTier(r.URL.Path),
+				})
+			}
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
 		}
 		if !s.authEnabled {
 			next(w, r)
 			return
 		}
 		if _, ok := s.authenticate(r); !ok {
+			s.authnDenied.Add(1)
 			if s.auditManager != nil {
 				s.auditManager.Append("authn", s.actorFromReq(r), "deny", map[string]any{"path": r.URL.Path})
 			}
@@ -2134,12 +3229,30 @@ func (s *syncServer) withAuthRoles(next http.HandlerFunc, roles ...string) http.
 		allowed[strings.ToLower(strings.TrimSpace(v))] = struct{}{}
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.allowRequest(r) {
+			s.rateLimitDenied.Add(1)
+			switch s.rateLimitTier(r.URL.Path) {
+			case "sensitive":
+				s.rateLimitDeniedSensitive.Add(1)
+			default:
+				s.rateLimitDeniedDefault.Add(1)
+			}
+			if s.auditManager != nil {
+				s.auditManager.Append("rate_limit", s.rateLimitKey(r), "deny", map[string]any{
+					"path": r.URL.Path,
+					"tier": s.rateLimitTier(r.URL.Path),
+				})
+			}
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
+		}
 		if !s.authEnabled {
 			next(w, r)
 			return
 		}
 		p, ok := s.authenticate(r)
 		if !ok {
+			s.authnDenied.Add(1)
 			if s.auditManager != nil {
 				s.auditManager.Append("authn", s.actorFromReq(r), "deny", map[string]any{"path": r.URL.Path})
 			}
@@ -2147,6 +3260,7 @@ func (s *syncServer) withAuthRoles(next http.HandlerFunc, roles ...string) http.
 			return
 		}
 		if _, ok := allowed[strings.ToLower(strings.TrimSpace(p.Role))]; !ok {
+			s.authzDenied.Add(1)
 			if s.auditManager != nil {
 				s.auditManager.Append("authz", p.UserID, "deny", map[string]any{"path": r.URL.Path, "role": p.Role})
 			}
@@ -2163,6 +3277,15 @@ func (s *syncServer) authenticate(r *http.Request) (authPrincipal, bool) {
 		return authPrincipal{}, false
 	}
 	token := strings.TrimSpace(auth[len("Bearer "):])
+	if s.authManager != nil {
+		if p, ok := s.authManager.Validate(token); ok {
+			return authPrincipal{
+				UserID: p.UserID,
+				Role:   p.Role,
+				Active: p.Active,
+			}, true
+		}
+	}
 	p, ok := s.authTokens[token]
 	if !ok || !p.Active {
 		return authPrincipal{}, false
@@ -2181,7 +3304,7 @@ func parseAuthTokens(raw string) (map[string]authPrincipal, error) {
 	return out, nil
 }
 
-func buildServerTLSConfig(caFile string, mtlsRequired bool) (*tls.Config, error) {
+func buildServerTLSConfig(caFile, crlFile string, mtlsRequired bool) (*tls.Config, error) {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if !mtlsRequired {
 		return cfg, nil
@@ -2195,6 +3318,25 @@ func buildServerTLSConfig(caFile string, mtlsRequired bool) (*tls.Config, error)
 	}
 	cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	cfg.ClientCAs = pool
+	revoked, err := loadRevokedSerials(crlFile)
+	if err != nil {
+		return nil, err
+	}
+	if len(revoked) > 0 {
+		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("missing peer certificate")
+			}
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return err
+			}
+			if revoked[cert.SerialNumber.String()] {
+				return fmt.Errorf("client certificate is revoked")
+			}
+			return nil
+		}
+	}
 	return cfg, nil
 }
 
@@ -2225,6 +3367,67 @@ func buildPeerHTTPClient(caFile, certFile, keyFile string) (*http.Client, error)
 	}, nil
 }
 
+type serveSecurityPolicyInput struct {
+	SecureModeRequired bool
+	AuthEnabled        bool
+	HasPeers           bool
+	TLSCert            string
+	TLSKey             string
+	TLSCA              string
+	MTLSRequired       bool
+	ClientCert         string
+	ClientKey          string
+	PeerToken          string
+}
+
+func validateServeSecurityPolicy(in serveSecurityPolicyInput) error {
+	tlsCert := strings.TrimSpace(in.TLSCert)
+	tlsKey := strings.TrimSpace(in.TLSKey)
+	tlsCA := strings.TrimSpace(in.TLSCA)
+	clientCert := strings.TrimSpace(in.ClientCert)
+	clientKey := strings.TrimSpace(in.ClientKey)
+	peerToken := strings.TrimSpace(in.PeerToken)
+
+	if (tlsCert == "") != (tlsKey == "") {
+		return fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must be provided together")
+	}
+	if (clientCert == "") != (clientKey == "") {
+		return fmt.Errorf("CLIENT_TLS_CERT_FILE and CLIENT_TLS_KEY_FILE must be provided together")
+	}
+	if in.MTLSRequired {
+		if tlsCert == "" || tlsKey == "" {
+			return fmt.Errorf("mTLS requires server TLS cert/key")
+		}
+		if tlsCA == "" {
+			return fmt.Errorf("mTLS requires TLS_CA_FILE")
+		}
+		if clientCert == "" || clientKey == "" {
+			return fmt.Errorf("mTLS requires client TLS cert/key for peer requests")
+		}
+	}
+	if !in.SecureModeRequired {
+		return nil
+	}
+	if in.HasPeers {
+		if !in.AuthEnabled {
+			return fmt.Errorf("secure mode requires AUTH_ENABLED=true when peers are configured")
+		}
+		if tlsCert == "" || tlsKey == "" {
+			return fmt.Errorf("secure mode requires TLS_CERT_FILE/TLS_KEY_FILE when peers are configured")
+		}
+		if tlsCA == "" {
+			return fmt.Errorf("secure mode requires TLS_CA_FILE when peers are configured")
+		}
+		if clientCert == "" || clientKey == "" {
+			return fmt.Errorf("secure mode requires CLIENT_TLS_CERT_FILE/CLIENT_TLS_KEY_FILE when peers are configured")
+		}
+		if peerToken == "" {
+			return fmt.Errorf("secure mode requires PEER_TOKEN when peers are configured")
+		}
+	}
+	return nil
+}
+
 func loadCertPool(caFile string) (*x509.CertPool, error) {
 	raw, err := os.ReadFile(caFile)
 	if err != nil {
@@ -2235,6 +3438,30 @@ func loadCertPool(caFile string) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("failed to parse CA file")
 	}
 	return pool, nil
+}
+
+func loadRevokedSerials(crlFile string) (map[string]bool, error) {
+	out := map[string]bool{}
+	crlFile = strings.TrimSpace(crlFile)
+	if crlFile == "" {
+		return out, nil
+	}
+	raw, err := os.ReadFile(crlFile)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("failed to parse CRL file")
+	}
+	rl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	for _, rc := range rl.RevokedCertificateEntries {
+		out[rc.SerialNumber.String()] = true
+	}
+	return out, nil
 }
 
 func (s *syncServer) attachAuth(req *http.Request, token string) {
@@ -2256,14 +3483,82 @@ func (s *syncServer) actorFromReq(r *http.Request) string {
 	if p, ok := s.authenticate(r); ok {
 		return p.UserID
 	}
-	return strings.TrimSpace(r.RemoteAddr)
+	ip := clientIPFromReq(r)
+	if ip == "" {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return ip
 }
 
 func (s *syncServer) rateLimitKey(r *http.Request) string {
 	if p, ok := s.authenticate(r); ok {
 		return "token:" + p.UserID
 	}
-	return "ip:" + strings.TrimSpace(r.RemoteAddr)
+	ip := clientIPFromReq(r)
+	if ip == "" {
+		ip = "unknown"
+	}
+	return "ip:" + ip
+}
+
+func clientIPFromReq(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		for _, part := range strings.Split(xff, ",") {
+			ip := strings.TrimSpace(part)
+			if ip != "" {
+				return ip
+			}
+		}
+	}
+	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+		return xrip
+	}
+	remote := strings.TrimSpace(r.RemoteAddr)
+	if remote == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(remote)
+	if err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(remote, "[]")
+}
+
+func (s *syncServer) allowRequest(r *http.Request) bool {
+	key := s.rateLimitKey(r)
+	switch s.rateLimitTier(r.URL.Path) {
+	case "sensitive":
+		if s.sensitiveRateLimiter == nil {
+			return true
+		}
+		return s.sensitiveRateLimiter.Allow(key)
+	default:
+		if s.rateLimiter == nil {
+			return true
+		}
+		return s.rateLimiter.Allow(key)
+	}
+}
+
+func (s *syncServer) rateLimitTier(path string) string {
+	path = strings.ToLower(strings.TrimSpace(path))
+	switch {
+	case strings.HasPrefix(path, "/raft/"):
+		return "sensitive"
+	case strings.HasPrefix(path, "/governance/"):
+		return "sensitive"
+	case strings.HasPrefix(path, "/team/"):
+		return "sensitive"
+	case strings.HasPrefix(path, "/trust/"):
+		return "sensitive"
+	case strings.HasPrefix(path, "/security/"):
+		return "sensitive"
+	default:
+		return "default"
+	}
 }
 
 type simpleRateLimiter struct {
@@ -2301,4 +3596,41 @@ func mustAtoi(s string) int {
 		return 120
 	}
 	return v
+}
+
+func mustDuration(raw string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func normalizePeerURL(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+		return ""
+	}
+	u, err := url.Parse(v)
+	if err != nil || strings.TrimSpace(u.Host) == "" {
+		return ""
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/")
 }

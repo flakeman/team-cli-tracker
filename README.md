@@ -87,7 +87,13 @@ go run ./cmd/node storage verify-integrity --data-dir ./data
 go run ./cmd/node serve --project-id OPS --listen :4101 \
   --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
   --auth-enabled --auth-tokens-json '{"admin-token":{"user_id":"u1","role":"admin","active":true}}' \
-  --peer-token admin-token
+  --peer-token admin-token \
+  --rate-limit-per-min 120 \
+  --rate-limit-sensitive-per-min 30
+
+# env-переменные для лимитов:
+# RATE_LIMIT_PER_MIN=120
+# RATE_LIMIT_SENSITIVE_PER_MIN=30
 
 # жизненный цикл команды
 go run ./cmd/node team onboard --user-id dev1 --role dev
@@ -207,7 +213,13 @@ go run ./cmd/node storage verify-integrity --data-dir ./data
 go run ./cmd/node serve --project-id OPS --listen :4101 \
   --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
   --auth-enabled --auth-tokens-json '{"admin-token":{"user_id":"u1","role":"admin","active":true}}' \
-  --peer-token admin-token
+  --peer-token admin-token \
+  --rate-limit-per-min 120 \
+  --rate-limit-sensitive-per-min 30
+
+# env vars for limits:
+# RATE_LIMIT_PER_MIN=120
+# RATE_LIMIT_SENSITIVE_PER_MIN=30
 
 # team lifecycle
 go run ./cmd/node team onboard --user-id dev1 --role dev

@@ -2,14 +2,27 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	mathrand "math/rand"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vladimir/team-cli-tracker/internal/audit"
+	authstore "github.com/vladimir/team-cli-tracker/internal/auth"
 	"github.com/vladimir/team-cli-tracker/internal/events"
 	"github.com/vladimir/team-cli-tracker/internal/governance"
 	"github.com/vladimir/team-cli-tracker/internal/node"
@@ -60,6 +73,360 @@ func TestThreeNodeConvergeAfterReconnect(t *testing.T) {
 	src, err := logA.ReadAll()
 	if err != nil || len(src) == 0 {
 		t.Fatalf("source log empty err=%v", err)
+	}
+}
+
+func TestThreeNodeConvergeUnderChurnFlapping(t *testing.T) {
+	base := t.TempDir()
+	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")
+	defer cleanupA()
+	_, srvB, cleanupB := newSyncServerForTest(t, filepath.Join(base, "b"), "node-b", "OPS")
+	defer cleanupB()
+	_, srvC, cleanupC := newSyncServerForTest(t, filepath.Join(base, "c"), "node-c", "OPS")
+	defer cleanupC()
+
+	// Initial topology: B sees only A. C joins later (churn/join).
+	srvA.syncServer.peers = []string{srvB.url}
+	srvB.syncServer.peers = []string{srvA.url}
+	srvC.syncServer.peers = []string{srvA.url, srvB.url}
+
+	if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", "OPS-301", "issue.create", map[string]string{
+		"status":  "todo",
+		"summary": "from A",
+	}); err != nil {
+		t.Fatalf("append A create: %v", err)
+	}
+	if err := appendIssueEvent(filepath.Join(base, "c"), "node-c", "OPS", "OPS-302", "issue.create", map[string]string{
+		"status":  "todo",
+		"summary": "from C",
+	}); err != nil {
+		t.Fatalf("append C create: %v", err)
+	}
+
+	// Phase 1: B pulls from A only (C not joined yet from B perspective).
+	srvB.syncServer.pullFromPeer(srvA.url)
+
+	// Join: B learns C and syncs.
+	srvB.syncServer.peers = []string{srvA.url, srvC.url}
+	srvB.syncServer.pullFromPeer(srvC.url)
+
+	// Flapping: temporarily drop A from B peers while new updates are written.
+	srvB.syncServer.peers = []string{srvC.url}
+	if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", "OPS-301", "issue.transition", map[string]string{
+		"from": "todo",
+		"to":   "in_progress",
+	}); err != nil {
+		t.Fatalf("append A transition: %v", err)
+	}
+	if err := appendIssueEvent(filepath.Join(base, "c"), "node-c", "OPS", "OPS-302", "issue.transition", map[string]string{
+		"from": "todo",
+		"to":   "code_review",
+	}); err != nil {
+		t.Fatalf("append C transition: %v", err)
+	}
+	srvB.syncServer.pullFromPeer(srvC.url)
+
+	// Rejoin: restore A and converge from both sides.
+	srvB.syncServer.peers = []string{srvA.url, srvC.url}
+	for i := 0; i < 3; i++ {
+		srvB.syncServer.pullFromPeer(srvA.url)
+		srvB.syncServer.pullFromPeer(srvC.url)
+	}
+
+	all, err := srvB.syncServer.log.ReadAll()
+	if err != nil {
+		t.Fatalf("read all on B: %v", err)
+	}
+	board := projectBoardFromEvents("OPS", all)
+	if len(board["in_progress"]) != 1 || board["in_progress"][0].ID != "OPS-301" {
+		t.Fatalf("OPS-301 not converged to in_progress: %+v", board["in_progress"])
+	}
+	if len(board["code_review"]) != 1 || board["code_review"][0].ID != "OPS-302" {
+		t.Fatalf("OPS-302 not converged to code_review: %+v", board["code_review"])
+	}
+}
+
+func TestProjectBoardFromEventsDeterministicReplayOrder(t *testing.T) {
+	base := t.TempDir()
+	if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", "OPS-401", "issue.create", map[string]string{
+		"status":  "todo",
+		"summary": "deterministic replay",
+	}); err != nil {
+		t.Fatalf("append create: %v", err)
+	}
+	if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", "OPS-401", "issue.transition", map[string]string{
+		"from": "todo",
+		"to":   "in_progress",
+	}); err != nil {
+		t.Fatalf("append transition: %v", err)
+	}
+	logA, err := store.Open(filepath.Join(base, "a"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	all, err := logA.ReadAll()
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+
+	one := append([]events.SignedEvent(nil), all...)
+	two := append([]events.SignedEvent(nil), all...)
+	r := mathrand.New(mathrand.NewSource(42))
+	r.Shuffle(len(two), func(i, j int) {
+		two[i], two[j] = two[j], two[i]
+	})
+
+	b1 := projectBoardFromEvents("OPS", one)
+	b2 := projectBoardFromEvents("OPS", two)
+	if len(b1["in_progress"]) != 1 || len(b2["in_progress"]) != 1 {
+		t.Fatalf("unexpected in_progress lengths b1=%d b2=%d", len(b1["in_progress"]), len(b2["in_progress"]))
+	}
+	if b1["in_progress"][0].ID != b2["in_progress"][0].ID || b1["in_progress"][0].Status != b2["in_progress"][0].Status {
+		t.Fatalf("replay result differs by input order: b1=%+v b2=%+v", b1["in_progress"][0], b2["in_progress"][0])
+	}
+}
+
+func TestThreeNodeConflictingTransitionsDeterministicAfterRejoin(t *testing.T) {
+	base := t.TempDir()
+	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")
+	defer cleanupA()
+	_, srvB, cleanupB := newSyncServerForTest(t, filepath.Join(base, "b"), "node-b", "OPS")
+	defer cleanupB()
+	_, srvC, cleanupC := newSyncServerForTest(t, filepath.Join(base, "c"), "node-c", "OPS")
+	defer cleanupC()
+
+	srvA.syncServer.peers = []string{srvB.url, srvC.url}
+	srvB.syncServer.peers = []string{srvA.url, srvC.url}
+	srvC.syncServer.peers = []string{srvA.url, srvB.url}
+
+	if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", "OPS-402", "issue.create", map[string]string{
+		"status":  "todo",
+		"summary": "conflict",
+	}); err != nil {
+		t.Fatalf("append create: %v", err)
+	}
+	srvB.syncServer.pullFromPeer(srvA.url)
+	srvC.syncServer.pullFromPeer(srvA.url)
+
+	// Partition-like conflicting local writes.
+	if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", "OPS-402", "issue.transition", map[string]string{
+		"from": "todo",
+		"to":   "in_progress",
+	}); err != nil {
+		t.Fatalf("append a transition: %v", err)
+	}
+	if err := appendIssueEvent(filepath.Join(base, "b"), "node-b", "OPS", "OPS-402", "issue.transition", map[string]string{
+		"from": "todo",
+		"to":   "testing",
+	}); err != nil {
+		t.Fatalf("append b transition: %v", err)
+	}
+
+	// Rejoin: exchange updates until convergence.
+	for i := 0; i < 4; i++ {
+		srvA.syncServer.pullFromPeer(srvB.url)
+		srvA.syncServer.pullFromPeer(srvC.url)
+		srvB.syncServer.pullFromPeer(srvA.url)
+		srvB.syncServer.pullFromPeer(srvC.url)
+		srvC.syncServer.pullFromPeer(srvA.url)
+		srvC.syncServer.pullFromPeer(srvB.url)
+	}
+
+	allA, err := srvA.syncServer.log.ReadAll()
+	if err != nil {
+		t.Fatalf("read all A: %v", err)
+	}
+	allB, err := srvB.syncServer.log.ReadAll()
+	if err != nil {
+		t.Fatalf("read all B: %v", err)
+	}
+	allC, err := srvC.syncServer.log.ReadAll()
+	if err != nil {
+		t.Fatalf("read all C: %v", err)
+	}
+	ba := projectBoardFromEvents("OPS", allA)
+	bb := projectBoardFromEvents("OPS", allB)
+	bc := projectBoardFromEvents("OPS", allC)
+
+	getStatus := func(board map[string][]issueProjection, id string) string {
+		for col, items := range board {
+			for _, it := range items {
+				if it.ID == id {
+					return col
+				}
+			}
+		}
+		return ""
+	}
+	sa := getStatus(ba, "OPS-402")
+	sb := getStatus(bb, "OPS-402")
+	sc := getStatus(bc, "OPS-402")
+	if sa == "" || sb == "" || sc == "" {
+		t.Fatalf("missing issue status after convergence: a=%q b=%q c=%q", sa, sb, sc)
+	}
+	if sa != sb || sb != sc {
+		t.Fatalf("divergent final status after rejoin: a=%q b=%q c=%q", sa, sb, sc)
+	}
+}
+
+func TestChaosPartitionRejoinDeterministicConvergence(t *testing.T) {
+	base := t.TempDir()
+	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")
+	defer cleanupA()
+	_, srvB, cleanupB := newSyncServerForTest(t, filepath.Join(base, "b"), "node-b", "OPS")
+	defer cleanupB()
+	_, srvC, cleanupC := newSyncServerForTest(t, filepath.Join(base, "c"), "node-c", "OPS")
+	defer cleanupC()
+
+	srvA.syncServer.peers = []string{srvB.url, srvC.url}
+	srvB.syncServer.peers = []string{srvA.url, srvC.url}
+	srvC.syncServer.peers = []string{srvA.url, srvB.url}
+
+	seed := mathrand.New(mathrand.NewSource(20260212))
+	for i := 1; i <= 25; i++ {
+		issueID := "OPS-C" + strconv.Itoa(i)
+		if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", issueID, "issue.create", map[string]string{
+			"status":  "todo",
+			"summary": "chaos",
+		}); err != nil {
+			t.Fatalf("append create %s: %v", issueID, err)
+		}
+		targetStatus := []string{"in_progress", "code_review", "testing"}[seed.Intn(3)]
+		if err := appendIssueEvent(filepath.Join(base, "b"), "node-b", "OPS", issueID, "issue.transition", map[string]string{
+			"from": "todo",
+			"to":   targetStatus,
+		}); err != nil {
+			t.Fatalf("append transition %s: %v", issueID, err)
+		}
+
+		// Partition/rejoin simulation with deterministic pattern.
+		switch i % 3 {
+		case 0:
+			srvA.syncServer.pullFromPeer(srvB.url)
+			srvC.syncServer.pullFromPeer(srvA.url)
+		case 1:
+			srvB.syncServer.pullFromPeer(srvC.url)
+			srvA.syncServer.pullFromPeer(srvC.url)
+		default:
+			srvC.syncServer.pullFromPeer(srvB.url)
+			srvB.syncServer.pullFromPeer(srvA.url)
+		}
+	}
+
+	for i := 0; i < 8; i++ {
+		srvA.syncServer.pullFromPeer(srvB.url)
+		srvA.syncServer.pullFromPeer(srvC.url)
+		srvB.syncServer.pullFromPeer(srvA.url)
+		srvB.syncServer.pullFromPeer(srvC.url)
+		srvC.syncServer.pullFromPeer(srvA.url)
+		srvC.syncServer.pullFromPeer(srvB.url)
+	}
+
+	allA, _ := srvA.syncServer.log.ReadAll()
+	allB, _ := srvB.syncServer.log.ReadAll()
+	allC, _ := srvC.syncServer.log.ReadAll()
+	ba := projectBoardFromEvents("OPS", allA)
+	bb := projectBoardFromEvents("OPS", allB)
+	bc := projectBoardFromEvents("OPS", allC)
+	if fmt.Sprintf("%v", ba) != fmt.Sprintf("%v", bb) || fmt.Sprintf("%v", bb) != fmt.Sprintf("%v", bc) {
+		t.Fatalf("boards diverged after chaos/rejoin")
+	}
+}
+
+func TestLongRunningSyncSoakDeterministic(t *testing.T) {
+	base := t.TempDir()
+	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")
+	defer cleanupA()
+	_, srvB, cleanupB := newSyncServerForTest(t, filepath.Join(base, "b"), "node-b", "OPS")
+	defer cleanupB()
+	_, srvC, cleanupC := newSyncServerForTest(t, filepath.Join(base, "c"), "node-c", "OPS")
+	defer cleanupC()
+
+	srvA.syncServer.peers = []string{srvB.url, srvC.url}
+	srvB.syncServer.peers = []string{srvA.url, srvC.url}
+	srvC.syncServer.peers = []string{srvA.url, srvB.url}
+
+	for i := 1; i <= 60; i++ {
+		issueID := "OPS-S" + strconv.Itoa(i)
+		if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", issueID, "issue.create", map[string]string{
+			"status":  "todo",
+			"summary": "soak",
+		}); err != nil {
+			t.Fatalf("append create %s: %v", issueID, err)
+		}
+		if i%2 == 0 {
+			if err := appendIssueEvent(filepath.Join(base, "a"), "node-a", "OPS", issueID, "issue.transition", map[string]string{
+				"from": "todo",
+				"to":   "in_progress",
+			}); err != nil {
+				t.Fatalf("append transition %s: %v", issueID, err)
+			}
+		}
+		srvB.syncServer.pullFromPeer(srvA.url)
+		srvC.syncServer.pullFromPeer(srvA.url)
+		if i%5 == 0 {
+			srvA.syncServer.pullFromPeer(srvB.url)
+			srvA.syncServer.pullFromPeer(srvC.url)
+		}
+	}
+
+	allA, _ := srvA.syncServer.log.ReadAll()
+	allB, _ := srvB.syncServer.log.ReadAll()
+	allC, _ := srvC.syncServer.log.ReadAll()
+	if len(allA) != len(allB) || len(allB) != len(allC) {
+		t.Fatalf("event log lengths diverged in soak: a=%d b=%d c=%d", len(allA), len(allB), len(allC))
+	}
+}
+
+func TestGovernanceReconfigureStressNoDivergence(t *testing.T) {
+	base := t.TempDir()
+	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")
+	defer cleanupA()
+	_, srvB, cleanupB := newSyncServerForTest(t, filepath.Join(base, "b"), "node-b", "OPS")
+	defer cleanupB()
+	_, srvC, cleanupC := newSyncServerForTest(t, filepath.Join(base, "c"), "node-c", "OPS")
+	defer cleanupC()
+
+	for _, srv := range []*testNodeServer{srvA, srvB, srvC} {
+		if err := srv.syncServer.govManager.SetNodeRole("node-a", "voting", true); err != nil {
+			t.Fatalf("seed voting a: %v", err)
+		}
+		if err := srv.syncServer.govManager.SetNodeRole("node-b", "voting", true); err != nil {
+			t.Fatalf("seed voting b: %v", err)
+		}
+		if err := srv.syncServer.govManager.SetNodeRole("node-c", "voting", true); err != nil {
+			t.Fatalf("seed voting c: %v", err)
+		}
+	}
+
+	sets := [][]string{
+		{"node-a", "node-b", "node-c"},
+		{"node-a", "node-c", "node-d"},
+		{"node-a", "node-b", "node-e"},
+		{"node-b", "node-c", "node-f"},
+	}
+	for i := 0; i < 20; i++ {
+		vset := sets[i%len(sets)]
+		body, _ := json.Marshal(map[string]any{"project_id": "OPS", "voting_nodes": vset})
+		for _, srv := range []*testNodeServer{srvA, srvB, srvC} {
+			req, _ := http.NewRequest(http.MethodPost, srv.url+"/governance/reconfigure", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("stress reconfigure request: %v", err)
+			}
+			res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				t.Fatalf("reconfigure status=%d want=200", res.StatusCode)
+			}
+		}
+	}
+
+	lA := srvA.syncServer.govManager.List()
+	lB := srvB.syncServer.govManager.List()
+	lC := srvC.syncServer.govManager.List()
+	if fmt.Sprintf("%v", lA) != fmt.Sprintf("%v", lB) || fmt.Sprintf("%v", lB) != fmt.Sprintf("%v", lC) {
+		t.Fatalf("governance state diverged after stress")
 	}
 }
 
@@ -190,10 +557,634 @@ func TestAuthzDenialForProtectedEndpoint(t *testing.T) {
 	}
 }
 
+func TestSensitiveEndpointsUseStricterRateLimit(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "rl"), "node-s", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"admin-token": {UserID: "admin1", Role: "admin", Active: true},
+	}
+	srv.syncServer.rateLimiter = newSimpleRateLimiter(5)
+	srv.syncServer.sensitiveRateLimiter = newSimpleRateLimiter(1)
+
+	req1, err := http.NewRequest(http.MethodGet, srv.url+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request metrics #1: %v", err)
+	}
+	req1.Header.Set("Authorization", "Bearer admin-token")
+	res1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("do metrics #1: %v", err)
+	}
+	defer res1.Body.Close()
+	if res1.StatusCode != http.StatusOK {
+		t.Fatalf("metrics #1 status=%d want=%d", res1.StatusCode, http.StatusOK)
+	}
+
+	req2, err := http.NewRequest(http.MethodGet, srv.url+"/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request metrics #2: %v", err)
+	}
+	req2.Header.Set("Authorization", "Bearer admin-token")
+	res2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("do metrics #2: %v", err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("metrics #2 status=%d want=%d", res2.StatusCode, http.StatusOK)
+	}
+
+	body := []byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)
+	req3, err := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request raft #1: %v", err)
+	}
+	req3.Header.Set("Authorization", "Bearer admin-token")
+	req3.Header.Set("Content-Type", "application/json")
+	res3, err := http.DefaultClient.Do(req3)
+	if err != nil {
+		t.Fatalf("do raft #1: %v", err)
+	}
+	defer res3.Body.Close()
+	if res3.StatusCode != http.StatusOK {
+		t.Fatalf("raft #1 status=%d want=%d", res3.StatusCode, http.StatusOK)
+	}
+
+	req4, err := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request raft #2: %v", err)
+	}
+	req4.Header.Set("Authorization", "Bearer admin-token")
+	req4.Header.Set("Content-Type", "application/json")
+	res4, err := http.DefaultClient.Do(req4)
+	if err != nil {
+		t.Fatalf("do raft #2: %v", err)
+	}
+	defer res4.Body.Close()
+	if res4.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("raft #2 status=%d want=%d", res4.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
+func TestRateLimitKeyUsesStableClientIP(t *testing.T) {
+	s := &syncServer{}
+	req1, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request #1: %v", err)
+	}
+	req1.RemoteAddr = "10.20.30.40:51001"
+	key1 := s.rateLimitKey(req1)
+
+	req2, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request #2: %v", err)
+	}
+	req2.RemoteAddr = "10.20.30.40:51099"
+	key2 := s.rateLimitKey(req2)
+
+	if key1 != "ip:10.20.30.40" {
+		t.Fatalf("key1=%q want=%q", key1, "ip:10.20.30.40")
+	}
+	if key2 != "ip:10.20.30.40" {
+		t.Fatalf("key2=%q want=%q", key2, "ip:10.20.30.40")
+	}
+}
+
+func TestRateLimitKeyUsesForwardedIP(t *testing.T) {
+	s := &syncServer{}
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.RemoteAddr = "127.0.0.1:49999"
+	req.Header.Set("X-Forwarded-For", "198.51.100.7, 10.0.0.1")
+	key := s.rateLimitKey(req)
+	if key != "ip:198.51.100.7" {
+		t.Fatalf("key=%q want=%q", key, "ip:198.51.100.7")
+	}
+}
+
+func TestRateLimitIsPerTokenBucket(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "rl-token"), "node-s", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"admin-a": {UserID: "admin-a", Role: "admin", Active: true},
+		"admin-b": {UserID: "admin-b", Role: "admin", Active: true},
+	}
+	srv.syncServer.sensitiveRateLimiter = newSimpleRateLimiter(1)
+
+	body := []byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)
+	call := func(token string) int {
+		req, err := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+
+	if got := call("admin-a"); got != http.StatusOK {
+		t.Fatalf("admin-a first status=%d want=%d", got, http.StatusOK)
+	}
+	if got := call("admin-a"); got != http.StatusTooManyRequests {
+		t.Fatalf("admin-a second status=%d want=%d", got, http.StatusTooManyRequests)
+	}
+	if got := call("admin-b"); got != http.StatusOK {
+		t.Fatalf("admin-b first status=%d want=%d", got, http.StatusOK)
+	}
+}
+
+func TestRateLimitIsPerIPBucketWithoutAuth(t *testing.T) {
+	s := &syncServer{
+		authEnabled: false,
+		rateLimiter: newSimpleRateLimiter(1),
+	}
+	req1, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request #1: %v", err)
+	}
+	req1.Header.Set("X-Forwarded-For", "203.0.113.10")
+	req1.RemoteAddr = "127.0.0.1:51001"
+	if !s.allowRequest(req1) {
+		t.Fatalf("first request for ip1 should be allowed")
+	}
+
+	req2, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request #2: %v", err)
+	}
+	req2.Header.Set("X-Forwarded-For", "203.0.113.10")
+	req2.RemoteAddr = "127.0.0.1:51099"
+	if s.allowRequest(req2) {
+		t.Fatalf("second request for ip1 should be denied by rate limit")
+	}
+
+	req3, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
+	if err != nil {
+		t.Fatalf("new request #3: %v", err)
+	}
+	req3.Header.Set("X-Forwarded-For", "203.0.113.11")
+	req3.RemoteAddr = "127.0.0.1:51111"
+	if !s.allowRequest(req3) {
+		t.Fatalf("first request for ip2 should be allowed")
+	}
+}
+
+func TestMetricsExposeSecurityCounters(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "metrics"), "node-s", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"admin-token": {UserID: "admin1", Role: "admin", Active: true},
+		"dev-token":   {UserID: "dev1", Role: "dev", Active: true},
+	}
+	srv.syncServer.rateLimiter = newSimpleRateLimiter(1)
+	srv.syncServer.sensitiveRateLimiter = newSimpleRateLimiter(1)
+
+	mustDo := func(req *http.Request) *http.Response {
+		t.Helper()
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		return res
+	}
+
+	reqAuthn, _ := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader([]byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)))
+	reqAuthn.Header.Set("Content-Type", "application/json")
+	resAuthn := mustDo(reqAuthn)
+	resAuthn.Body.Close()
+
+	reqAuthz, _ := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader([]byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)))
+	reqAuthz.Header.Set("Authorization", "Bearer dev-token")
+	reqAuthz.Header.Set("Content-Type", "application/json")
+	resAuthz := mustDo(reqAuthz)
+	resAuthz.Body.Close()
+
+	reqOK, _ := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader([]byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)))
+	reqOK.Header.Set("Authorization", "Bearer admin-token")
+	reqOK.Header.Set("Content-Type", "application/json")
+	resOK := mustDo(reqOK)
+	resOK.Body.Close()
+
+	reqRate, _ := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader([]byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)))
+	reqRate.Header.Set("Authorization", "Bearer admin-token")
+	reqRate.Header.Set("Content-Type", "application/json")
+	resRate := mustDo(reqRate)
+	resRate.Body.Close()
+
+	mReq, _ := http.NewRequest(http.MethodGet, srv.url+"/metrics", nil)
+	mRes := mustDo(mReq)
+	defer mRes.Body.Close()
+	if mRes.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status=%d want=%d", mRes.StatusCode, http.StatusOK)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(mRes.Body).Decode(&out); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+
+	if int(out["authn_denied_total"].(float64)) < 1 {
+		t.Fatalf("authn_denied_total=%v want>=1", out["authn_denied_total"])
+	}
+	if int(out["authz_denied_total"].(float64)) < 1 {
+		t.Fatalf("authz_denied_total=%v want>=1", out["authz_denied_total"])
+	}
+	if int(out["rate_limit_denied_total"].(float64)) < 1 {
+		t.Fatalf("rate_limit_denied_total=%v want>=1", out["rate_limit_denied_total"])
+	}
+	if int(out["rate_limit_denied_sensitive"].(float64)) < 1 {
+		t.Fatalf("rate_limit_denied_sensitive=%v want>=1", out["rate_limit_denied_sensitive"])
+	}
+}
+
+func TestPeerBackoffStateProgression(t *testing.T) {
+	s := &syncServer{}
+	peer := "http://127.0.0.1:4102"
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	if !s.shouldPullPeer(peer, now) {
+		t.Fatalf("fresh peer should be pullable")
+	}
+
+	s.recordPeerPullResult(peer, false, now)
+	if s.shouldPullPeer(peer, now) {
+		t.Fatalf("peer should be in backoff after first failure")
+	}
+	if !s.shouldPullPeer(peer, now.Add(2*time.Second)) {
+		t.Fatalf("peer should exit first backoff window")
+	}
+
+	s.recordPeerPullResult(peer, false, now.Add(2*time.Second))
+	if !s.shouldPullPeer(peer, now.Add(5*time.Second)) {
+		t.Fatalf("peer should exit second (2s) backoff window")
+	}
+
+	s.recordPeerPullResult(peer, true, now.Add(5*time.Second))
+	if !s.shouldPullPeer(peer, now.Add(5*time.Second)) {
+		t.Fatalf("peer should be immediately pullable after success reset")
+	}
+}
+
+func TestPeerBackoffActiveCount(t *testing.T) {
+	s := &syncServer{}
+	now := time.Unix(1_700_000_100, 0).UTC()
+	s.recordPeerPullResult("http://127.0.0.1:4102", false, now)
+	s.recordPeerPullResult("http://127.0.0.1:4103", true, now)
+	if got := s.peerBackoffActive(now); got != 1 {
+		t.Fatalf("active backoff peers=%d want=1", got)
+	}
+}
+
+func TestRefreshDiscoveredPeersTrustGated(t *testing.T) {
+	base := t.TempDir()
+	tm, err := trust.Open(base)
+	if err != nil {
+		t.Fatalf("open trust: %v", err)
+	}
+	_ = tm.TrustNode("node-b")
+	_ = tm.TrustNode("node-c")
+
+	candidateC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "node_id": "node-c"})
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}))
+	defer candidateC.Close()
+
+	candidateD := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "node_id": "node-d"})
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}))
+	defer candidateD.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sync/peers" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"node_id": "node-b",
+				"peers":   []string{candidateC.URL, candidateD.URL},
+			})
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}))
+	defer source.Close()
+
+	s := &syncServer{
+		peers:           []string{source.URL},
+		httpClient:      http.DefaultClient,
+		trustManager:    tm,
+		discoveryTTL:    45 * time.Second,
+		discoveredPeers: map[string]int64{},
+		peerNodeByURL:   map[string]string{},
+	}
+	s.refreshDiscoveredPeers(time.Now().UTC())
+
+	s.peerMu.Lock()
+	_, hasC := s.discoveredPeers[normalizePeerURL(candidateC.URL)]
+	_, hasD := s.discoveredPeers[normalizePeerURL(candidateD.URL)]
+	s.peerMu.Unlock()
+	if !hasC {
+		t.Fatalf("trusted peer C should be discovered")
+	}
+	if hasD {
+		t.Fatalf("untrusted peer D should not be discovered")
+	}
+}
+
+func TestPruneDiscoveredPeersByTTLAndTrust(t *testing.T) {
+	base := t.TempDir()
+	tm, err := trust.Open(base)
+	if err != nil {
+		t.Fatalf("open trust: %v", err)
+	}
+	_ = tm.TrustNode("node-c")
+	_ = tm.TrustNode("node-e")
+
+	s := &syncServer{
+		trustManager:    tm,
+		discoveryTTL:    10 * time.Second,
+		discoveredPeers: map[string]int64{},
+		peerNodeByURL:   map[string]string{},
+		peerSync:        map[string]peerSyncState{},
+	}
+	now := time.Unix(1_700_000_500, 0).UTC()
+	s.addDiscoveredPeer("http://peer-c:4101", "node-c", now)
+	s.addDiscoveredPeer("http://peer-e:4101", "node-e", now.Add(-20*time.Second))
+
+	if err := tm.RevokeNode("node-c"); err != nil {
+		t.Fatalf("revoke node-c: %v", err)
+	}
+	s.pruneDiscoveredPeers(now)
+
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if _, ok := s.discoveredPeers["http://peer-c:4101"]; ok {
+		t.Fatalf("revoked trusted peer should be pruned")
+	}
+	if _, ok := s.discoveredPeers["http://peer-e:4101"]; ok {
+		t.Fatalf("expired peer should be pruned by ttl")
+	}
+}
+
 func TestMTLSConfigRequiresCA(t *testing.T) {
-	_, err := buildServerTLSConfig("", true)
+	_, err := buildServerTLSConfig("", "", true)
 	if err == nil {
 		t.Fatalf("expected error when mtls is enabled without CA file")
+	}
+}
+
+func TestMTLSRejectsExpiredClientCertRuntime(t *testing.T) {
+	base := t.TempDir()
+	files := writeTestPKI(t, base, true, false)
+	srvTLS, err := buildServerTLSConfig(files.caCertFile, "", true)
+	if err != nil {
+		t.Fatalf("build server tls: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.TLS = srvTLS
+	srv.StartTLS()
+	defer srv.Close()
+
+	cert, err := tls.LoadX509KeyPair(files.expiredCertFile, files.expiredKeyFile)
+	if err != nil {
+		t.Fatalf("load expired cert: %v", err)
+	}
+	pool := x509.NewCertPool()
+	rawCA, _ := os.ReadFile(files.caCertFile)
+	pool.AppendCertsFromPEM(rawCA)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs:      pool,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}}}
+	_, err = client.Get(srv.URL)
+	if err == nil {
+		t.Fatalf("expected TLS handshake error for expired client cert")
+	}
+}
+
+func TestMTLSRejectsRevokedClientCertRuntime(t *testing.T) {
+	base := t.TempDir()
+	files := writeTestPKI(t, base, false, true)
+	srvTLS, err := buildServerTLSConfig(files.caCertFile, files.crlFile, true)
+	if err != nil {
+		t.Fatalf("build server tls: %v", err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.TLS = srvTLS
+	srv.StartTLS()
+	defer srv.Close()
+
+	cert, err := tls.LoadX509KeyPair(files.clientCertFile, files.clientKeyFile)
+	if err != nil {
+		t.Fatalf("load client cert: %v", err)
+	}
+	pool := x509.NewCertPool()
+	rawCA, _ := os.ReadFile(files.caCertFile)
+	pool.AppendCertsFromPEM(rawCA)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs:      pool,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}}}
+	_, err = client.Get(srv.URL)
+	if err == nil {
+		t.Fatalf("expected TLS handshake error for revoked client cert")
+	}
+}
+
+func TestServeSecurityPolicyAllowsSecurePeerSetup(t *testing.T) {
+	err := validateServeSecurityPolicy(serveSecurityPolicyInput{
+		SecureModeRequired: true,
+		AuthEnabled:        true,
+		HasPeers:           true,
+		TLSCert:            "server.pem",
+		TLSKey:             "server.key",
+		TLSCA:              "ca.pem",
+		MTLSRequired:       true,
+		ClientCert:         "client.pem",
+		ClientKey:          "client.key",
+		PeerToken:          "token",
+	})
+	if err != nil {
+		t.Fatalf("expected secure policy to pass, got error: %v", err)
+	}
+}
+
+func TestServeSecurityPolicyRejectsPeersWithoutAuth(t *testing.T) {
+	err := validateServeSecurityPolicy(serveSecurityPolicyInput{
+		SecureModeRequired: true,
+		AuthEnabled:        false,
+		HasPeers:           true,
+		TLSCert:            "server.pem",
+		TLSKey:             "server.key",
+		TLSCA:              "ca.pem",
+		ClientCert:         "client.pem",
+		ClientKey:          "client.key",
+		PeerToken:          "token",
+	})
+	if err == nil {
+		t.Fatalf("expected error for peers without auth in secure mode")
+	}
+}
+
+func TestServeSecurityPolicyRejectsPartialTLSKeyPair(t *testing.T) {
+	err := validateServeSecurityPolicy(serveSecurityPolicyInput{
+		SecureModeRequired: false,
+		TLSCert:            "server.pem",
+	})
+	if err == nil {
+		t.Fatalf("expected error for partial server tls pair")
+	}
+}
+
+func TestServeSecurityPolicyRejectsMTLSWithoutClientCert(t *testing.T) {
+	err := validateServeSecurityPolicy(serveSecurityPolicyInput{
+		SecureModeRequired: false,
+		MTLSRequired:       true,
+		TLSCert:            "server.pem",
+		TLSKey:             "server.key",
+		TLSCA:              "ca.pem",
+	})
+	if err == nil {
+		t.Fatalf("expected error for mtls without client cert/key")
+	}
+}
+
+func TestStorageRecoveryDrillWritesAuditEvidence(t *testing.T) {
+	base := t.TempDir()
+	logDB, err := store.Open(base)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	e := events.SignedEvent{
+		Version:   1,
+		ProjectID: "OPS",
+		EntityID:  "OPS-901",
+		Type:      "issue.create",
+		Payload:   []byte(`{"status":"todo","summary":"drill"}`),
+		SignerID:  "node-1",
+		SignerPub: []byte("pub"),
+		Signature: []byte("sig"),
+		Seq:       1,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := logDB.Append(e); err != nil {
+		t.Fatalf("append seed event: %v", err)
+	}
+
+	runStorage([]string{"recovery-drill", "--data-dir", base})
+
+	am, err := audit.Open(base)
+	if err != nil {
+		t.Fatalf("open audit: %v", err)
+	}
+	items, err := am.ReadTail(50)
+	if err != nil {
+		t.Fatalf("read audit tail: %v", err)
+	}
+	found := false
+	for _, it := range items {
+		if it.Type == "storage.key.recovery_drill" && it.Status == "ok" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected storage.key.recovery_drill audit evidence")
+	}
+}
+
+func TestAuthIssueAndRevokeLifecycle(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "auth"), "node-1", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"admin-token": {UserID: "admin1", Role: "admin", Active: true},
+	}
+	if srv.syncServer.authManager == nil {
+		t.Fatalf("auth manager must be initialized")
+	}
+	_ = srv.syncServer.authManager.SeedStatic(map[string]authstore.Principal{
+		"admin-token": {UserID: "admin1", Role: "admin", Active: true},
+	})
+
+	issueReq, _ := http.NewRequest(http.MethodPost, srv.url+"/auth/issue", bytes.NewReader([]byte(`{"user_id":"dev-x","role":"dev","ttl_sec":3600}`)))
+	issueReq.Header.Set("Authorization", "Bearer admin-token")
+	issueReq.Header.Set("Content-Type", "application/json")
+	issueRes, err := http.DefaultClient.Do(issueReq)
+	if err != nil {
+		t.Fatalf("issue do: %v", err)
+	}
+	defer issueRes.Body.Close()
+	if issueRes.StatusCode != http.StatusCreated {
+		t.Fatalf("issue status=%d want=%d", issueRes.StatusCode, http.StatusCreated)
+	}
+	var rec map[string]any
+	if err := json.NewDecoder(issueRes.Body).Decode(&rec); err != nil {
+		t.Fatalf("decode issued token: %v", err)
+	}
+	token, _ := rec["token"].(string)
+	if strings.TrimSpace(token) == "" {
+		t.Fatalf("issued token is empty")
+	}
+
+	protectedReq, _ := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader([]byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)))
+	protectedReq.Header.Set("Authorization", "Bearer "+token)
+	protectedReq.Header.Set("Content-Type", "application/json")
+	protectedRes, err := http.DefaultClient.Do(protectedReq)
+	if err != nil {
+		t.Fatalf("protected do: %v", err)
+	}
+	defer protectedRes.Body.Close()
+	if protectedRes.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected dev token to pass authn then fail authz; got=%d", protectedRes.StatusCode)
+	}
+
+	revokeReq, _ := http.NewRequest(http.MethodPost, srv.url+"/auth/revoke", bytes.NewReader([]byte(`{"token":"`+token+`"}`)))
+	revokeReq.Header.Set("Authorization", "Bearer admin-token")
+	revokeReq.Header.Set("Content-Type", "application/json")
+	revokeRes, err := http.DefaultClient.Do(revokeReq)
+	if err != nil {
+		t.Fatalf("revoke do: %v", err)
+	}
+	defer revokeRes.Body.Close()
+	if revokeRes.StatusCode != http.StatusOK {
+		t.Fatalf("revoke status=%d want=%d", revokeRes.StatusCode, http.StatusOK)
+	}
+
+	afterReq, _ := http.NewRequest(http.MethodPost, srv.url+"/raft/validate-transition", bytes.NewReader([]byte(`{"project_id":"OPS","issue_id":"OPS-1","from":"todo","to":"in_progress"}`)))
+	afterReq.Header.Set("Authorization", "Bearer "+token)
+	afterReq.Header.Set("Content-Type", "application/json")
+	afterRes, err := http.DefaultClient.Do(afterReq)
+	if err != nil {
+		t.Fatalf("after revoke do: %v", err)
+	}
+	defer afterRes.Body.Close()
+	if afterRes.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked token must fail authn status=%d want=%d", afterRes.StatusCode, http.StatusUnauthorized)
 	}
 }
 
@@ -295,6 +1286,112 @@ func TestTeamOffboardRejectedWithoutQuorum(t *testing.T) {
 	members := srv.syncServer.teamManager.List()
 	if len(members) != 1 || !members[0].Active {
 		t.Fatalf("member must remain active when quorum is not reached: %+v", members)
+	}
+}
+
+func TestTeamOnboardRejectedWithoutQuorum(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "on"), "node-1", "OPS")
+	defer cleanup()
+	srv.syncServer.peers = []string{"http://127.0.0.1:1"}
+
+	body := []byte(`{"project_id":"OPS","user_id":"dev1","role":"dev"}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/team/onboard", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusOK)
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "rejected" {
+		t.Fatalf("status=%q want=%q", out.Status, "rejected")
+	}
+	if got := srv.syncServer.teamManager.List(); len(got) != 0 {
+		t.Fatalf("team member must not be created on rejected quorum: %+v", got)
+	}
+}
+
+func TestTeamRoleChangeRejectedWithoutQuorum(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "rc"), "node-1", "OPS")
+	defer cleanup()
+	srv.syncServer.peers = []string{"http://127.0.0.1:1"}
+	if err := srv.syncServer.teamManager.Onboard(team.Member{UserID: "dev1", Role: "dev", Active: true}); err != nil {
+		t.Fatalf("onboard seed: %v", err)
+	}
+
+	body := []byte(`{"project_id":"OPS","user_id":"dev1","role":"lead"}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/team/role-change", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusOK)
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "rejected" {
+		t.Fatalf("status=%q want=%q", out.Status, "rejected")
+	}
+	members := srv.syncServer.teamManager.List()
+	if len(members) != 1 || members[0].Role != "dev" {
+		t.Fatalf("role must remain unchanged on rejected quorum: %+v", members)
+	}
+}
+
+func TestGovernanceNodeRoleRejectedWithoutQuorum(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "gn"), "node-1", "OPS")
+	defer cleanup()
+	srv.syncServer.peers = []string{"http://127.0.0.1:1"}
+
+	body := []byte(`{"project_id":"OPS","node_id":"node-2","role":"voting","active":true}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/governance/node-role", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusOK)
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "rejected" {
+		t.Fatalf("status=%q want=%q", out.Status, "rejected")
+	}
+	if srv.syncServer.govManager.IsVoting("node-2") {
+		t.Fatalf("node-2 role must not change on rejected quorum")
 	}
 }
 
@@ -696,6 +1793,110 @@ func requireAuditQuorumMetadata(t *testing.T, records []audit.Event, eventType s
 	t.Fatalf("audit record not found for %s", eventType)
 }
 
+type testPKIFiles struct {
+	caCertFile      string
+	clientCertFile  string
+	clientKeyFile   string
+	expiredCertFile string
+	expiredKeyFile  string
+	crlFile         string
+}
+
+func writeTestPKI(t *testing.T, dir string, wantExpiredClient bool, wantRevokeClient bool) testPKIFiles {
+	t.Helper()
+	now := time.Now().UTC()
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate ca key: %v", err)
+	}
+	caTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             now.Add(-2 * time.Hour),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create ca cert: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse ca cert: %v", err)
+	}
+	caCertFile := filepath.Join(dir, "ca.pem")
+	writePEMFile(t, caCertFile, "CERTIFICATE", caDER)
+
+	makeClient := func(serial int64, notBefore, notAfter time.Time, certFile, keyFile string) *x509.Certificate {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("generate client key: %v", err)
+		}
+		tpl := &x509.Certificate{
+			SerialNumber: big.NewInt(serial),
+			Subject:      pkix.Name{CommonName: "client"},
+			NotBefore:    notBefore,
+			NotAfter:     notAfter,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tpl, caCert, &key.PublicKey, caKey)
+		if err != nil {
+			t.Fatalf("create client cert: %v", err)
+		}
+		writePEMFile(t, certFile, "CERTIFICATE", der)
+		writePEMFile(t, keyFile, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(key))
+		parsed, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("parse client cert: %v", err)
+		}
+		return parsed
+	}
+
+	files := testPKIFiles{
+		caCertFile:      caCertFile,
+		clientCertFile:  filepath.Join(dir, "client.pem"),
+		clientKeyFile:   filepath.Join(dir, "client.key"),
+		expiredCertFile: filepath.Join(dir, "expired.pem"),
+		expiredKeyFile:  filepath.Join(dir, "expired.key"),
+		crlFile:         filepath.Join(dir, "ca.crl.pem"),
+	}
+
+	clientCert := makeClient(11, now.Add(-1*time.Hour), now.Add(24*time.Hour), files.clientCertFile, files.clientKeyFile)
+	if wantExpiredClient {
+		_ = makeClient(12, now.Add(-48*time.Hour), now.Add(-24*time.Hour), files.expiredCertFile, files.expiredKeyFile)
+	}
+	if wantRevokeClient {
+		rlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+			Number:     big.NewInt(1),
+			ThisUpdate: now.Add(-1 * time.Hour),
+			NextUpdate: now.Add(24 * time.Hour),
+			RevokedCertificateEntries: []x509.RevocationListEntry{
+				{
+					SerialNumber:   clientCert.SerialNumber,
+					RevocationTime: now.Add(-30 * time.Minute),
+				},
+			},
+		}, caCert, caKey)
+		if err != nil {
+			t.Fatalf("create crl: %v", err)
+		}
+		writePEMFile(t, files.crlFile, "X509 CRL", rlDER)
+	}
+
+	return files
+}
+
+func writePEMFile(t *testing.T, path, typ string, der []byte) {
+	t.Helper()
+	raw := pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der})
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write pem %s: %v", path, err)
+	}
+}
+
 type testNodeServer struct {
 	syncServer *syncServer
 	server     *httptest.Server
@@ -724,6 +1925,10 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	if err != nil {
 		t.Fatalf("open trust: %v", err)
 	}
+	au, err := authstore.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open auth store: %v", err)
+	}
 	id, err := node.LoadOrCreate(dataDir, nodeID)
 	if err != nil {
 		t.Fatalf("load identity: %v", err)
@@ -737,6 +1942,7 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 		auditManager: am,
 		teamManager:  tm,
 		trustManager: trm,
+		authManager:  au,
 		identity:     id,
 	}
 	mux := http.NewServeMux()
@@ -749,15 +1955,29 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-team-onboard", s.withAuthRoles(s.raftVoteTeamOnboard, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-team-onboard", s.withAuthRoles(s.raftValidateTeamOnboard, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-team-role-change", s.withAuthRoles(s.raftVoteTeamRoleChange, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-team-role-change", s.withAuthRoles(s.raftValidateTeamRoleChange, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-trust-invite", s.withAuthRoles(s.raftVoteTrustInvite, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-trust-invite", s.withAuthRoles(s.raftValidateTrustInvite, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-trust-revoke", s.withAuthRoles(s.raftVoteTrustRevoke, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-trust-revoke", s.withAuthRoles(s.raftValidateTrustRevoke, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-governance-node-role", s.withAuthRoles(s.raftVoteGovernanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-governance-node-role", s.withAuthRoles(s.raftValidateGovernanceNodeRole, "admin", "lead"))
 	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
 	mux.HandleFunc("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
+	mux.HandleFunc("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
+	mux.HandleFunc("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
+	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
+	mux.HandleFunc("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
+	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
+	mux.HandleFunc("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
+	mux.HandleFunc("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	ts := httptest.NewServer(mux)
 	out := &testNodeServer{syncServer: s, server: ts, url: ts.URL}

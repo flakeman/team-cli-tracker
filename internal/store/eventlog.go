@@ -19,6 +19,7 @@ type EventLog struct {
 	metaPath    string
 	keyRingPath string
 	keyRing     *keyRing
+	keyProvider externalKeyProvider
 	replayIx    map[string]struct{}
 	lastSeq     map[string]uint64
 }
@@ -64,6 +65,11 @@ func Open(dataDir string) (*EventLog, error) {
 	}
 	l.keyRing = kr
 	l.keyRingPath = krPath
+	provider, err := initExternalKeyProviderFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	l.keyProvider = provider
 	if err := l.ensureMetaAndMigrate(); err != nil {
 		return nil, err
 	}

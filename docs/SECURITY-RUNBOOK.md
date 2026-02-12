@@ -13,6 +13,7 @@ This runbook defines baseline operational security checks and incident response 
 ## Daily Security Checks
 1. Verify node health and security endpoint:
    - `teamcli security status --node <url>`
+   - `curl -s http://127.0.0.1:4101/metrics`
 2. Check recent denied requests and auth failures:
    - `teamcli security audit --since 24h --type auth.failed`
 3. Check trust list consistency:
@@ -22,13 +23,26 @@ This runbook defines baseline operational security checks and incident response 
 5. Verify no integrity errors:
    - `teamcli events verify-chain --project <id>`
 
+## Baseline Metric Thresholds
+- `pull_errors`: page if continuously increasing for `>5m`.
+- `sync_peer_pull_success / sync_peer_pulls`: investigate if below `0.95` for `>15m`.
+- `rate_limit_denied_sensitive`: investigate burst if `>20` per `5m` per node.
+- `authn_denied_total`: investigate if growth is `>50` per `10m` per node.
+- `authz_denied_total`: investigate if growth is `>20` per `10m` per node.
+- Alert IDs and rule details: `docs/ALERTS.md` (`ALT-001`..`ALT-005`).
+
 ## Key Operations
 1. Rotate encryption key:
-   - `teamcli keys rotate --project <id>`
+   - `go run ./cmd/node storage rotate-key --data-dir ./data --enforce-due --max-age 720h`
 2. Validate backward-compatible decryption:
-   - Read historical issue/comment payloads after rotation.
+   - `go run ./cmd/node storage recovery-drill --data-dir ./data`
 3. Record change in audit:
-   - Actor, reason, timestamp, affected project.
+   - `storage.key.enable`, `storage.key.rotate`, `storage.key.policy_check`, `storage.key.recovery_drill`
+4. Check policy due state:
+   - `go run ./cmd/node storage key-policy-check --data-dir ./data --max-age 720h`
+5. External secret store mode (equivalent hardened provider):
+   - `EVENT_KEY_PROVIDER=file`
+   - `EVENT_KEY_PROVIDER_FILE=/etc/team-cli-tracker/external-keys.json`
 
 ## Node Join Hardening
 1. Generate short-lived invite token:
@@ -54,6 +68,7 @@ This runbook defines baseline operational security checks and incident response 
 ## Incident Response Checklist
 1. Detect:
    - Alert from failed mTLS, auth bursts, integrity mismatch, or unexpected role change.
+   - Record triggered alert ID(s) from `docs/ALERTS.md`.
 2. Contain:
    - Revoke suspicious node/member.
    - Block invite issuance temporarily.
