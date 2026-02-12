@@ -13,19 +13,25 @@ import (
 )
 
 type EventLog struct {
-	mu       sync.Mutex
-	dataDir  string
-	path     string
-	metaPath string
-	replayIx map[string]struct{}
-	lastSeq  map[string]uint64
+	mu          sync.Mutex
+	dataDir     string
+	path        string
+	metaPath    string
+	keyRingPath string
+	keyRing     *keyRing
+	replayIx    map[string]struct{}
+	lastSeq     map[string]uint64
 }
 
 type persistedEvent struct {
 	events.SignedEvent
-	PayloadB64   string `json:"payload_b64"`
-	SignerPubB64 string `json:"signer_pub_b64"`
-	SignatureB64 string `json:"signature_b64"`
+	PayloadB64       string `json:"payload_b64"`
+	PayloadEnc       bool   `json:"payload_enc"`
+	PayloadKeyID     string `json:"payload_key_id,omitempty"`
+	PayloadNonceB64  string `json:"payload_nonce_b64,omitempty"`
+	PayloadCipherB64 string `json:"payload_cipher_b64,omitempty"`
+	SignerPubB64     string `json:"signer_pub_b64"`
+	SignatureB64     string `json:"signature_b64"`
 }
 
 type storeMeta struct {
@@ -52,6 +58,12 @@ func Open(dataDir string) (*EventLog, error) {
 		replayIx: make(map[string]struct{}),
 		lastSeq:  make(map[string]uint64),
 	}
+	kr, krPath, err := loadKeyRing(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	l.keyRing = kr
+	l.keyRingPath = krPath
 	if err := l.ensureMetaAndMigrate(); err != nil {
 		return nil, err
 	}
@@ -81,12 +93,18 @@ func (l *EventLog) Append(e events.SignedEvent) error {
 		return fmt.Errorf("invalid sequence: got=%d want=%d", e.Seq, current+1)
 	}
 
-	row := persistedEvent{
-		SignedEvent:  e,
-		PayloadB64:   base64.StdEncoding.EncodeToString(e.Payload),
-		SignerPubB64: base64.StdEncoding.EncodeToString(e.SignerPub),
-		SignatureB64: base64.StdEncoding.EncodeToString(e.Signature),
+	row, err := l.toPersistedEvent(e)
+	if err != nil {
+		return err
 	}
+	row.SignedEvent = e
+	row.PayloadB64 = row.PayloadB64
+	row.PayloadEnc = row.PayloadEnc
+	row.PayloadKeyID = row.PayloadKeyID
+	row.PayloadNonceB64 = row.PayloadNonceB64
+	row.PayloadCipherB64 = row.PayloadCipherB64
+	row.SignerPubB64 = base64.StdEncoding.EncodeToString(e.SignerPub)
+	row.SignatureB64 = base64.StdEncoding.EncodeToString(e.Signature)
 	row.Payload = nil
 	row.SignerPub = nil
 	row.Signature = nil
@@ -112,6 +130,10 @@ func (l *EventLog) Append(e events.SignedEvent) error {
 func (l *EventLog) ReadAll() ([]events.SignedEvent, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.readAllUnlocked()
+}
+
+func (l *EventLog) readAllUnlocked() ([]events.SignedEvent, error) {
 
 	f, err := os.Open(l.path)
 	if err != nil {
@@ -130,7 +152,7 @@ func (l *EventLog) ReadAll() ([]events.SignedEvent, error) {
 		if err := json.Unmarshal(line, &row); err != nil {
 			return nil, err
 		}
-		payload, err := base64.StdEncoding.DecodeString(row.PayloadB64)
+		payload, err := l.decodePayload(row)
 		if err != nil {
 			return nil, err
 		}
@@ -267,6 +289,12 @@ func (l *EventLog) migrateSetDefaultEventVersion() error {
 }
 
 func (l *EventLog) rewriteAll(all []events.SignedEvent) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.rewriteAllUnlocked(all)
+}
+
+func (l *EventLog) rewriteAllUnlocked(all []events.SignedEvent) error {
 	f, err := os.OpenFile(l.path, os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -274,12 +302,13 @@ func (l *EventLog) rewriteAll(all []events.SignedEvent) error {
 	defer f.Close()
 
 	for _, e := range all {
-		row := persistedEvent{
-			SignedEvent:  e,
-			PayloadB64:   base64.StdEncoding.EncodeToString(e.Payload),
-			SignerPubB64: base64.StdEncoding.EncodeToString(e.SignerPub),
-			SignatureB64: base64.StdEncoding.EncodeToString(e.Signature),
+		row, err := l.toPersistedEvent(e)
+		if err != nil {
+			return err
 		}
+		row.SignedEvent = e
+		row.SignerPubB64 = base64.StdEncoding.EncodeToString(e.SignerPub)
+		row.SignatureB64 = base64.StdEncoding.EncodeToString(e.Signature)
 		row.Payload = nil
 		row.SignerPub = nil
 		row.Signature = nil
@@ -303,4 +332,43 @@ func replayKey(projectID, signerID string, seq uint64) string {
 
 func seqKey(projectID, signerID string) string {
 	return projectID + "|" + signerID
+}
+
+func (l *EventLog) toPersistedEvent(e events.SignedEvent) (persistedEvent, error) {
+	keyID, key, err := l.activeKey()
+	if err != nil {
+		return persistedEvent{}, err
+	}
+	if len(key) == 0 {
+		return persistedEvent{PayloadB64: base64.StdEncoding.EncodeToString(e.Payload)}, nil
+	}
+	nonce, cipherText, err := encryptAESGCM(key, e.Payload)
+	if err != nil {
+		return persistedEvent{}, err
+	}
+	return persistedEvent{
+		PayloadEnc:       true,
+		PayloadKeyID:     keyID,
+		PayloadNonceB64:  base64.StdEncoding.EncodeToString(nonce),
+		PayloadCipherB64: base64.StdEncoding.EncodeToString(cipherText),
+	}, nil
+}
+
+func (l *EventLog) decodePayload(row persistedEvent) ([]byte, error) {
+	if !row.PayloadEnc {
+		return base64.StdEncoding.DecodeString(row.PayloadB64)
+	}
+	key, err := l.keyByID(row.PayloadKeyID)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := base64.StdEncoding.DecodeString(row.PayloadNonceB64)
+	if err != nil {
+		return nil, err
+	}
+	cipherText, err := base64.StdEncoding.DecodeString(row.PayloadCipherB64)
+	if err != nil {
+		return nil, err
+	}
+	return decryptAESGCM(key, nonce, cipherText)
 }

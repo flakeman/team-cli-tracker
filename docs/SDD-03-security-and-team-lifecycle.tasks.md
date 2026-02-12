@@ -8,9 +8,9 @@
 - [x] T03-004 Add role authorization matrix enforcement for issue/policy actions.
 - [x] T03-005 Implement trusted-node allowlist and invite token flow.
 - [x] T03-006 Implement node revoke flow and trust cache refresh.
-- [ ] T03-007 Implement encryption-at-rest for sensitive event payload.
-- [ ] T03-008 Add key rotation commands and backward-compatible decryption path.
-- [ ] T03-009 Add event chain integrity verification command.
+- [x] T03-007 Implement encryption-at-rest for sensitive event payload.
+- [x] T03-008 Add key rotation commands and backward-compatible decryption path.
+- [x] T03-009 Add event chain integrity verification command.
 - [ ] T03-010 Add onboarding command/API (create member + role + project grant).
 - [ ] T03-011 Add role change command/API with audit trail.
 - [ ] T03-012 Add offboarding command/API (disable access + revoke tokens).
@@ -33,3 +33,6 @@
 - [x] T03-004 Add role authorization matrix enforcement for issue/policy actions.
 - [x] T03-005 Implement trusted-node allowlist and invite token flow.
 - [x] T03-006 Implement node revoke flow and trust cache refresh.
+- [x] T03-007 Implement encryption-at-rest for sensitive event payload.
+- [x] T03-008 Add key rotation commands and backward-compatible decryption path.
+- [x] T03-009 Add event chain integrity verification command.

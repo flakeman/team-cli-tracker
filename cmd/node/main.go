@@ -184,7 +184,7 @@ func runBoard(args []string) {
 
 func runStorage(args []string) {
 	if len(args) < 1 {
-		fmt.Println("storage commands: migrate")
+		fmt.Println("storage commands: migrate | enable-encryption | rotate-key | verify-integrity")
 		return
 	}
 	switch args[0] {
@@ -196,8 +196,46 @@ func runStorage(args []string) {
 			fatal(err)
 		}
 		fmt.Printf("ok: storage migration check complete data-dir=%s\n", *dataDir)
+	case "enable-encryption":
+		fs := flag.NewFlagSet("storage enable-encryption", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		logDB, err := store.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		keyID, err := logDB.EnableEncryption()
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("ok: encryption enabled active_key_id=%s\n", keyID)
+	case "rotate-key":
+		fs := flag.NewFlagSet("storage rotate-key", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		logDB, err := store.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		keyID, err := logDB.RotateEncryptionKey()
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("ok: encryption key rotated active_key_id=%s\n", keyID)
+	case "verify-integrity":
+		fs := flag.NewFlagSet("storage verify-integrity", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		logDB, err := store.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		if err := logDB.VerifyIntegrity(); err != nil {
+			fatal(err)
+		}
+		fmt.Println("ok: event chain integrity verified")
 	default:
-		fmt.Println("storage commands: migrate")
+		fmt.Println("storage commands: migrate | enable-encryption | rotate-key | verify-integrity")
 	}
 }
 
@@ -883,6 +921,9 @@ func printUsage() {
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
+	fmt.Println("  node storage enable-encryption [--data-dir ./data]")
+	fmt.Println("  node storage rotate-key [--data-dir ./data]")
+	fmt.Println("  node storage verify-integrity [--data-dir ./data]")
 	fmt.Println("  node trust invite --node-id node-x [--ttl-sec 3600]")
 	fmt.Println("  node trust use-invite --node-id node-x --token <token>")
 	fmt.Println("  node trust revoke --node-id node-x")

@@ -79,6 +79,10 @@ go run ./cmd/node serve --project-id OPS --listen :4101 --peers "http://127.0.0.
 # миграция схемы event-store
 go run ./cmd/node storage migrate --data-dir ./data
 
+go run ./cmd/node storage enable-encryption --data-dir ./data
+go run ./cmd/node storage rotate-key --data-dir ./data
+go run ./cmd/node storage verify-integrity --data-dir ./data
+
 # защищенный режим (TLS + token auth)
 go run ./cmd/node serve --project-id OPS --listen :4101 \
   --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
@@ -182,6 +186,10 @@ go run ./cmd/node serve --project-id OPS --listen :4101 --peers "http://127.0.0.
 # run event-store schema migration hooks
 go run ./cmd/node storage migrate --data-dir ./data
 
+go run ./cmd/node storage enable-encryption --data-dir ./data
+go run ./cmd/node storage rotate-key --data-dir ./data
+go run ./cmd/node storage verify-integrity --data-dir ./data
+
 # secure mode (TLS + token auth)
 go run ./cmd/node serve --project-id OPS --listen :4101 \
   --tls-cert ./certs/node.pem --tls-key ./certs/node-key.pem \
@@ -203,6 +211,7 @@ go run ./cmd/node serve --project-id OPS --listen :4101 \
 3. Basic issue commands: create, transition, comment.
 4. CLI board rendering from replicated state.
 5. Raft-protected transition validation.
+
 
 
 
