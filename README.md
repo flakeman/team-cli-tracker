@@ -32,6 +32,46 @@ go test ./...
 go run ./cmd/node
 ```
 
+## CLI Examples
+
+### Example Task Card (JSON)
+```json
+{
+  "id": "OPS-104",
+  "type": "bug",
+  "summary": "Fix timeout in billing worker",
+  "status": "in_progress",
+  "priority": "high",
+  "assignee_id": "vladimir",
+  "due_date": "2026-02-15",
+  "updated_at": "2026-02-12T16:40:00Z"
+}
+```
+
+### Example Board View (Terminal)
+```text
+Project: OPS  Revision: 7
+Assignee WIP limit: 3
++----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
+| To Do [2/20]                     | In Progress [1/8]                | Code Review [1/6]                | Testing [1/6]                    | Done [2/inf]                     |
++----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
+| OPS-120 Add audit logs @unassign | OPS-104 Fix billing timeout @vla | OPS-101 Add health endpoint @lea | OPS-115 UI regression checks @qa | OPS-097 Update runbook @olga     |
+| OPS-130 Add SLA reminder hooks @ |                                  |                                  |                                  | OPS-099 DB migration cleanup @dm |
++----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
+```
+
+### Example Commands
+```bash
+# run node
+go run ./cmd/node
+
+# render board from tracker API
+go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS
+
+# machine-readable output
+go run ./cmd/kanban-cli -base-url http://localhost:8084 -project-id OPS -format json
+```
+
 ## Docs
 - Architecture spec: `docs/SDD-01-decentralized-kanban.md`
 - Delivery roadmap: `docs/ROADMAP.md`
