@@ -484,6 +484,8 @@ func runServe(args []string) {
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
@@ -544,6 +546,11 @@ type transitionRequest struct {
 type governanceReconfigureRequest struct {
 	ProjectID   string   `json:"project_id"`
 	VotingNodes []string `json:"voting_nodes"`
+}
+
+type teamOffboardRequest struct {
+	ProjectID string `json:"project_id"`
+	UserID    string `json:"user_id"`
 }
 
 type authPrincipal struct {
@@ -745,11 +752,31 @@ func (s *syncServer) teamOffboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var in struct {
-		UserID string `json:"user_id"`
-	}
+	var in teamOffboardRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTeamOffboardWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":             "rejected",
+			"reason":             "quorum not reached",
+			"granted":            granted,
+			"needed":             needed,
+			"mode":               modeName(s.preferredLeader),
+			"preferred_leader":   s.preferredLeader,
+			"preferred_online":   preferredOnline,
+			"failover_activated": s.preferredLeader != "" && !preferredOnline,
+		})
 		return
 	}
 	if _, err := s.teamManager.Offboard(in.UserID); err != nil {
@@ -763,6 +790,91 @@ func (s *syncServer) teamOffboard(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditManager.Append("team.offboard", s.actorFromReq(r), "ok", map[string]any{"user_id": in.UserID, "reassigned": cnt})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "offboarded", "user_id": in.UserID, "reassigned_issues": cnt})
+}
+
+func (s *syncServer) raftVoteTeamOffboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in teamOffboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": "user_id is required", "node_id": s.nodeID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
+}
+
+func (s *syncServer) raftValidateTeamOffboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in teamOffboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.ProjectID) != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project mismatch"})
+		return
+	}
+	if strings.TrimSpace(in.UserID) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":   false,
+			"reason":  "user_id is required",
+			"granted": 0,
+			"needed":  quorumNeeded(len(s.peers) + 1),
+		})
+		return
+	}
+	granted, needed, preferredOnline, ok := s.validateTeamOffboardWithQuorum(in)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow":   false,
+			"reason":  "quorum not reached",
+			"granted": granted,
+			"needed":  needed,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
+	})
+}
+
+func (s *syncServer) validateTeamOffboardWithQuorum(in teamOffboardRequest) (granted, needed int, preferredOnline bool, ok bool) {
+	granted = 1
+	totalNodes := len(s.peers) + 1
+	needed = quorumNeeded(totalNodes)
+	preferredOnline = false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
+	for _, peer := range s.peers {
+		allow, voterID, _ := requestTeamOffboardVote(s.getHTTPClient(), s.peerToken, peer, in)
+		if allow {
+			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
+		}
+	}
+	return granted, needed, preferredOnline, granted >= needed
 }
 
 func (s *syncServer) teamList(w http.ResponseWriter, r *http.Request) {
@@ -1532,6 +1644,39 @@ func requestGovernanceReconfigureVote(client *http.Client, peerToken, peerBaseUR
 	return out.Allow, out.NodeID, nil
 }
 
+func requestTeamOffboardVote(client *http.Client, peerToken, peerBaseURL string, in teamOffboardRequest) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return false, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-team-offboard", bytes.NewReader(raw))
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(peerToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(peerToken))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return false, "", err
+	}
+	return out.Allow, out.NodeID, nil
+}
+
 func validateVotingSet(nodes []string) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("voting_nodes must not be empty")
@@ -1602,11 +1747,18 @@ func reassignFromEvents(logDB *store.EventLog, id node.Identity, tm *team.Manage
 		reason = "unassigned_fallback"
 	}
 	board := projectBoardFromEvents(projectID, all)
-	count := 0
-	for col, issues := range board {
+	columns := make([]string, 0, len(board))
+	for col := range board {
 		if col == "done" {
 			continue
 		}
+		columns = append(columns, col)
+	}
+	sort.Strings(columns)
+	count := 0
+	for _, col := range columns {
+		issues := board[col]
+		sort.Slice(issues, func(i, j int) bool { return issues[i].ID < issues[j].ID })
 		for _, it := range issues {
 			if it.Assignee != offboardedUser {
 				continue

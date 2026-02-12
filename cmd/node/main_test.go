@@ -256,6 +256,105 @@ func TestGovernanceReconfigureRejectsEvenVotingSet(t *testing.T) {
 	}
 }
 
+func TestTeamOffboardRejectedWithoutQuorum(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "o"), "node-1", "OPS")
+	defer cleanup()
+	srv.syncServer.peers = []string{"http://127.0.0.1:1"}
+	if err := srv.syncServer.teamManager.Onboard(team.Member{UserID: "dev1", Role: "dev", Active: true}); err != nil {
+		t.Fatalf("onboard: %v", err)
+	}
+
+	body := []byte(`{"project_id":"OPS","user_id":"dev1"}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/team/offboard", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusOK)
+	}
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "rejected" {
+		t.Fatalf("status=%q want=%q", out.Status, "rejected")
+	}
+	members := srv.syncServer.teamManager.List()
+	if len(members) != 1 || !members[0].Active {
+		t.Fatalf("member must remain active when quorum is not reached: %+v", members)
+	}
+}
+
+func TestReassignFromEventsDeterministicOrder(t *testing.T) {
+	base := t.TempDir()
+	dataDir := filepath.Join(base, "d")
+	nodeID := "node-1"
+	projectID := "OPS"
+	if err := appendIssueEvent(dataDir, nodeID, projectID, "OPS-2", "issue.create", map[string]string{
+		"status":   "todo",
+		"summary":  "Later id",
+		"assignee": "dev1",
+	}); err != nil {
+		t.Fatalf("append OPS-2: %v", err)
+	}
+	if err := appendIssueEvent(dataDir, nodeID, projectID, "OPS-1", "issue.create", map[string]string{
+		"status":   "todo",
+		"summary":  "Earlier id",
+		"assignee": "dev1",
+	}); err != nil {
+		t.Fatalf("append OPS-1: %v", err)
+	}
+	tm, err := team.Open(dataDir)
+	if err != nil {
+		t.Fatalf("team open: %v", err)
+	}
+	if err := tm.Onboard(team.Member{UserID: "lead1", Role: "lead", Active: true}); err != nil {
+		t.Fatalf("onboard lead: %v", err)
+	}
+	if _, err := tm.Offboard("dev1"); err == nil {
+		t.Fatalf("expected offboard error for missing dev1 before onboarding")
+	}
+	if err := tm.Onboard(team.Member{UserID: "dev1", Role: "dev", Active: true}); err != nil {
+		t.Fatalf("onboard dev: %v", err)
+	}
+	if _, err := tm.Offboard("dev1"); err != nil {
+		t.Fatalf("offboard dev: %v", err)
+	}
+	count, err := reassignOffboardedUser(dataDir, nodeID, projectID, "dev1", tm)
+	if err != nil {
+		t.Fatalf("reassign: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("reassign count=%d want=2", count)
+	}
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open log: %v", err)
+	}
+	all, err := logDB.ReadAll()
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+	reassigned := make([]string, 0, 2)
+	for _, e := range all {
+		if e.Type == "issue.reassign" {
+			reassigned = append(reassigned, e.EntityID)
+		}
+	}
+	if len(reassigned) != 2 || reassigned[0] != "OPS-1" || reassigned[1] != "OPS-2" {
+		t.Fatalf("unexpected reassign order: %+v", reassigned)
+	}
+}
+
 type testNodeServer struct {
 	syncServer *syncServer
 	server     *httptest.Server
@@ -276,6 +375,14 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	if err != nil {
 		t.Fatalf("open audit: %v", err)
 	}
+	tm, err := team.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open team: %v", err)
+	}
+	id, err := node.LoadOrCreate(dataDir, nodeID)
+	if err != nil {
+		t.Fatalf("load identity: %v", err)
+	}
 	s := &syncServer{
 		projectID:    projectID,
 		nodeID:       nodeID,
@@ -283,6 +390,8 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 		peers:        nil,
 		govManager:   gm,
 		auditManager: am,
+		teamManager:  tm,
+		identity:     id,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sync/clock", s.syncClock)
@@ -292,7 +401,10 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
+	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
+	mux.HandleFunc("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
 	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
+	mux.HandleFunc("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	ts := httptest.NewServer(mux)
 	out := &testNodeServer{syncServer: s, server: ts, url: ts.URL}
