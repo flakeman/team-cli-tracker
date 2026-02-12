@@ -126,6 +126,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD визуальной полировки board: `docs/SDD-07-board-visual-polish.md`
 - План SDD-07: `docs/SDD-07-board-visual-polish.plan.md`
 - Задачи SDD-07: `docs/SDD-07-board-visual-polish.tasks.md`
+- Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
@@ -272,6 +273,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - Board visual polish SDD: `docs/SDD-07-board-visual-polish.md`
 - SDD-07 plan: `docs/SDD-07-board-visual-polish.plan.md`
 - SDD-07 tasks: `docs/SDD-07-board-visual-polish.tasks.md`
+- Board live smoke (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
