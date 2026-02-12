@@ -16,8 +16,8 @@
 - [x] T02-012 Implement CLI board renderer (plain + JSON).
 - [x] T02-013 Implement Raft policy service for transition validation.
 - [x] T02-014 Wire transition command through Raft validation path.
-- [ ] T02-015 Implement admin-preferred election priority mode.
-- [ ] T02-016 Add failover test: admin preferred leader down -> re-election.
+- [x] T02-015 Implement admin-preferred election priority mode.
+- [x] T02-016 Add failover test: admin preferred leader down -> re-election.
 - [ ] T02-017 Add integration test: 3-node converge after network split/reconnect.
 - [ ] T02-018 Add integration test: invalid signature and replay rejection.
 - [ ] T02-019 Add metrics/logging for sync lag and policy decisions.
@@ -38,3 +38,5 @@
 - [x] T02-012 Implement CLI board renderer (plain + JSON).
 - [x] T02-013 Implement Raft policy service for transition validation.
 - [x] T02-014 Wire transition command through Raft validation path.
+- [x] T02-015 Implement admin-preferred election priority mode.
+- [x] T02-016 Add failover test: admin preferred leader down -> re-election.

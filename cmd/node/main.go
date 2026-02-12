@@ -180,6 +180,8 @@ func runServe(args []string) {
 	projectID := fs.String("project-id", envOr("PROJECT_ID", "OPS"), "project id")
 	listenAddr := fs.String("listen", envOr("LISTEN_ADDR", ":4101"), "http listen address")
 	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs")
+	nodeRole := fs.String("node-role", envOr("NODE_ROLE", "member"), "node role: admin|member")
+	preferredLeader := fs.String("preferred-leader", envOr("PREFERRED_LEADER", ""), "preferred leader node id (optional)")
 	tick := fs.Duration("sync-tick", 3*time.Second, "sync interval")
 	_ = fs.Parse(args)
 
@@ -193,10 +195,12 @@ func runServe(args []string) {
 	}
 	peers := parsePeers(*peersCSV)
 	s := &syncServer{
-		projectID: *projectID,
-		nodeID:    id.NodeID,
-		log:       log,
-		peers:     peers,
+		projectID:       *projectID,
+		nodeID:          id.NodeID,
+		log:             log,
+		peers:           peers,
+		nodeRole:        strings.ToLower(strings.TrimSpace(*nodeRole)),
+		preferredLeader: strings.TrimSpace(*preferredLeader),
 	}
 
 	mux := http.NewServeMux()
@@ -215,10 +219,12 @@ func runServe(args []string) {
 }
 
 type syncServer struct {
-	projectID string
-	nodeID    string
-	log       *store.EventLog
-	peers     []string
+	projectID       string
+	nodeID          string
+	log             *store.EventLog
+	peers           []string
+	nodeRole        string
+	preferredLeader string
 }
 
 type transitionRequest struct {
@@ -309,7 +315,7 @@ func (s *syncServer) raftVoteTransition(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"allow": false, "reason": err.Error(), "node_id": s.nodeID})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID})
+	writeJSON(w, http.StatusOK, map[string]any{"allow": true, "node_id": s.nodeID, "node_role": s.nodeRole})
 }
 
 func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Request) {
@@ -339,11 +345,18 @@ func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Reque
 	granted := 1 // local vote
 	totalNodes := len(s.peers) + 1
 	needed := quorumNeeded(totalNodes)
+	preferredOnline := false
+	if s.preferredLeader != "" && s.nodeID == s.preferredLeader {
+		preferredOnline = true
+	}
 
 	for _, peer := range s.peers {
-		ok, _ := requestTransitionVote(peer, in)
+		ok, voterID, _ := requestTransitionVote(peer, in)
 		if ok {
 			granted++
+		}
+		if s.preferredLeader != "" && voterID == s.preferredLeader {
+			preferredOnline = true
 		}
 	}
 	if granted < needed {
@@ -356,9 +369,13 @@ func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"allow":   true,
-		"granted": granted,
-		"needed":  needed,
+		"allow":              true,
+		"granted":            granted,
+		"needed":             needed,
+		"mode":               modeName(s.preferredLeader),
+		"preferred_leader":   s.preferredLeader,
+		"preferred_online":   preferredOnline,
+		"failover_activated": s.preferredLeader != "" && !preferredOnline,
 	})
 }
 
@@ -603,7 +620,7 @@ func printUsage() {
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
-	fmt.Println("  node serve --project-id OPS --listen :4101 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
+	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 
 func printIssueUsage() {
@@ -730,35 +747,43 @@ func validateWorkflowTransition(from, to string) error {
 	return nil
 }
 
-func requestTransitionVote(peerBaseURL string, in transitionRequest) (bool, error) {
+func requestTransitionVote(peerBaseURL string, in transitionRequest) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	raw, err := json.Marshal(in)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(peerBaseURL, "/")+"/raft/vote-transition", bytes.NewReader(raw))
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
-		return false, fmt.Errorf("vote status=%d", res.StatusCode)
+		return false, "", fmt.Errorf("vote status=%d", res.StatusCode)
 	}
 	var out struct {
-		Allow bool `json:"allow"`
+		Allow  bool   `json:"allow"`
+		NodeID string `json:"node_id"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return out.Allow, nil
+	return out.Allow, out.NodeID, nil
 }
 
 func quorumNeeded(total int) int {
 	return total/2 + 1
+}
+
+func modeName(preferredLeader string) string {
+	if strings.TrimSpace(preferredLeader) == "" {
+		return "normal"
+	}
+	return "admin_preferred"
 }
