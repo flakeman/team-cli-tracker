@@ -35,6 +35,8 @@ func main() {
 		runBoard(os.Args[2:])
 	case "serve":
 		runServe(os.Args[2:])
+	case "storage":
+		runStorage(os.Args[2:])
 	default:
 		printUsage()
 	}
@@ -172,6 +174,25 @@ func runBoard(args []string) {
 		fmt.Println(string(raw))
 	default:
 		printBoardPlain(*projectID, board)
+	}
+}
+
+func runStorage(args []string) {
+	if len(args) < 1 {
+		fmt.Println("storage commands: migrate")
+		return
+	}
+	switch args[0] {
+	case "migrate":
+		fs := flag.NewFlagSet("storage migrate", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		if _, err := store.Open(*dataDir); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("ok: storage migration check complete data-dir=%s\n", *dataDir)
+	default:
+		fmt.Println("storage commands: migrate")
 	}
 }
 
@@ -652,6 +673,7 @@ func printUsage() {
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
 	fmt.Println("  node board --project-id OPS [--format plain|json]")
+	fmt.Println("  node storage migrate [--data-dir ./data]")
 	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 

@@ -14,7 +14,9 @@ import (
 
 type EventLog struct {
 	mu       sync.Mutex
+	dataDir  string
 	path     string
+	metaPath string
 	replayIx map[string]struct{}
 	lastSeq  map[string]uint64
 }
@@ -25,6 +27,12 @@ type persistedEvent struct {
 	SignerPubB64 string `json:"signer_pub_b64"`
 	SignatureB64 string `json:"signature_b64"`
 }
+
+type storeMeta struct {
+	SchemaVersion int `json:"schema_version"`
+}
+
+const currentSchemaVersion = 2
 
 func Open(dataDir string) (*EventLog, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -38,9 +46,14 @@ func Open(dataDir string) (*EventLog, error) {
 	_ = f.Close()
 
 	l := &EventLog{
+		dataDir:  dataDir,
 		path:     path,
+		metaPath: filepath.Join(dataDir, "events.meta.json"),
 		replayIx: make(map[string]struct{}),
 		lastSeq:  make(map[string]uint64),
+	}
+	if err := l.ensureMetaAndMigrate(); err != nil {
+		return nil, err
 	}
 	if err := l.loadIndexes(); err != nil {
 		return nil, err
@@ -183,6 +196,103 @@ func (l *EventLog) loadIndexes() error {
 		if e.Seq > l.lastSeq[k] {
 			l.lastSeq[k] = e.Seq
 		}
+	}
+	return nil
+}
+
+func (l *EventLog) ensureMetaAndMigrate() error {
+	meta, err := l.loadMeta()
+	if err != nil {
+		return err
+	}
+	if meta.SchemaVersion == 0 {
+		meta.SchemaVersion = 1
+	}
+	if meta.SchemaVersion < currentSchemaVersion {
+		if err := l.runMigrations(meta.SchemaVersion, currentSchemaVersion); err != nil {
+			return err
+		}
+		meta.SchemaVersion = currentSchemaVersion
+	}
+	return l.saveMeta(meta)
+}
+
+func (l *EventLog) loadMeta() (storeMeta, error) {
+	if _, err := os.Stat(l.metaPath); os.IsNotExist(err) {
+		return storeMeta{SchemaVersion: 1}, nil
+	}
+	raw, err := os.ReadFile(l.metaPath)
+	if err != nil {
+		return storeMeta{}, err
+	}
+	var m storeMeta
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return storeMeta{}, err
+	}
+	return m, nil
+}
+
+func (l *EventLog) saveMeta(m storeMeta) error {
+	raw, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(l.metaPath, raw, 0o644)
+}
+
+func (l *EventLog) runMigrations(fromVersion, toVersion int) error {
+	if fromVersion >= toVersion {
+		return nil
+	}
+	// v1 -> v2: ensure explicit event version field in jsonl rows.
+	if fromVersion < 2 && toVersion >= 2 {
+		if err := l.migrateSetDefaultEventVersion(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *EventLog) migrateSetDefaultEventVersion() error {
+	eventsAll, err := l.ReadAll()
+	if err != nil {
+		return err
+	}
+	for i := range eventsAll {
+		if eventsAll[i].Version == 0 {
+			eventsAll[i].Version = 1
+		}
+	}
+	return l.rewriteAll(eventsAll)
+}
+
+func (l *EventLog) rewriteAll(all []events.SignedEvent) error {
+	f, err := os.OpenFile(l.path, os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, e := range all {
+		row := persistedEvent{
+			SignedEvent:  e,
+			PayloadB64:   base64.StdEncoding.EncodeToString(e.Payload),
+			SignerPubB64: base64.StdEncoding.EncodeToString(e.SignerPub),
+			SignatureB64: base64.StdEncoding.EncodeToString(e.Signature),
+		}
+		row.Payload = nil
+		row.SignerPub = nil
+		row.Signature = nil
+		raw, err := json.Marshal(row)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(append(raw, '\n')); err != nil {
+			return err
+		}
+	}
+	if err := f.Sync(); err != nil {
+		return err
 	}
 	return nil
 }

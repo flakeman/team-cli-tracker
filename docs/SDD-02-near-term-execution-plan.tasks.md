@@ -5,7 +5,7 @@
 - [x] T02-001 Implement node key generation + persistent identity.
 - [x] T02-002 Implement event signature creation and verification.
 - [x] T02-003 Implement append-only event store with replay protection.
-- [ ] T02-004 Add event schema versioning and migration hooks.
+- [x] T02-004 Add event schema versioning and migration hooks.
 - [x] T02-005 Implement peer bootstrap and discovery handshake.
 - [x] T02-006 Implement vector clock state exchange endpoint.
 - [x] T02-007 Implement missing-range event pull and apply pipeline.
@@ -28,6 +28,7 @@
 - [x] T02-001 Implement node key generation + persistent identity.
 - [x] T02-002 Implement event signature creation and verification.
 - [x] T02-003 Implement append-only event store with replay protection.
+- [x] T02-004 Add event schema versioning and migration hooks.
 - [x] T02-005 Implement peer bootstrap and discovery handshake.
 - [x] T02-006 Implement vector clock state exchange endpoint.
 - [x] T02-007 Implement missing-range event pull and apply pipeline.
