@@ -617,7 +617,7 @@ func runAuth(args []string) {
 
 func runAudit(args []string) {
 	if len(args) < 1 {
-		fmt.Println("audit commands: export")
+		fmt.Println("audit commands: export | verify-integrity")
 		return
 	}
 	switch args[0] {
@@ -629,6 +629,8 @@ func runAudit(args []string) {
 		to := fs.String("to", "", "RFC3339 end time (inclusive)")
 		user := fs.String("user", "", "comma-separated user ids")
 		format := fs.String("format", "jsonl", "jsonl|csv")
+		limit := fs.Int("limit", 0, "page size (0 means all)")
+		cursor := fs.String("cursor", "", "page cursor (offset)")
 		_ = fs.Parse(args[1:])
 
 		fromTS, toTS, err := parseAuditTimeRange(*from, *to)
@@ -651,9 +653,13 @@ func runAudit(args []string) {
 			fatal(err)
 		}
 		records = filterAuditEvents(records, fromTS, toTS, users)
+		paged, nextCursor, err := paginateAuditEvents(records, *limit, *cursor)
+		if err != nil {
+			fatal(err)
+		}
 		switch strings.ToLower(strings.TrimSpace(*format)) {
 		case "jsonl":
-			for _, rec := range records {
+			for _, rec := range paged {
 				raw, err := json.Marshal(rec)
 				if err != nil {
 					continue
@@ -663,7 +669,7 @@ func runAudit(args []string) {
 		case "csv":
 			w := csv.NewWriter(os.Stdout)
 			_ = w.Write([]string{"time", "type", "actor", "status", "details_json"})
-			for _, rec := range records {
+			for _, rec := range paged {
 				detailsRaw := "{}"
 				if rec.Details != nil {
 					if raw, err := json.Marshal(rec.Details); err == nil {
@@ -679,16 +685,37 @@ func runAudit(args []string) {
 		default:
 			fatal(fmt.Errorf("unsupported format: %s", *format))
 		}
+		if nextCursor != "" {
+			fmt.Fprintf(os.Stderr, "next_cursor=%s\n", nextCursor)
+		}
 		am.Append("audit.export", "local-cli", "ok", map[string]any{
 			"all":    *all,
 			"from":   strings.TrimSpace(*from),
 			"to":     strings.TrimSpace(*to),
 			"user":   strings.TrimSpace(*user),
 			"format": strings.ToLower(strings.TrimSpace(*format)),
-			"count":  len(records),
+			"count":  len(paged),
+			"limit":  *limit,
+			"cursor": strings.TrimSpace(*cursor),
+			"next_cursor": nextCursor,
 		})
+	case "verify-integrity":
+		fs := flag.NewFlagSet("audit verify-integrity", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		_ = fs.Parse(args[1:])
+		am, err := audit.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		checked, err := am.VerifyIntegrity()
+		if err != nil {
+			am.Append("audit.verify_integrity", "local-cli", "error", map[string]any{"error": err.Error()})
+			fatal(err)
+		}
+		am.Append("audit.verify_integrity", "local-cli", "ok", map[string]any{"checked": checked})
+		fmt.Printf("ok: audit integrity verified checked=%d\n", checked)
 	default:
-		fmt.Println("audit commands: export")
+		fmt.Println("audit commands: export | verify-integrity")
 	}
 }
 
@@ -2859,7 +2886,8 @@ func printUsage() {
 	fmt.Println("  node auth list")
 	fmt.Println("  node auth bind-role --user-id u1 --role lead")
 	fmt.Println("  node auth list-bindings")
-	fmt.Println("  node audit export [--all] [--from RFC3339] [--to RFC3339] [--user u1,u2] [--format jsonl|csv]")
+	fmt.Println("  node audit export [--all] [--from RFC3339] [--to RFC3339] [--user u1,u2] [--format jsonl|csv] [--limit N --cursor K]")
+	fmt.Println("  node audit verify-integrity")
 	fmt.Println("  node team onboard --user-id u1 --role dev [--duty]")
 	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
 	fmt.Println("  node team offboard --project-id OPS --user-id u1")
@@ -2929,6 +2957,30 @@ func filterAuditEvents(in []audit.Event, fromTS, toTS *time.Time, users map[stri
 		out = append(out, e)
 	}
 	return out
+}
+
+func paginateAuditEvents(in []audit.Event, limit int, cursor string) ([]audit.Event, string, error) {
+	offset := 0
+	v := strings.TrimSpace(cursor)
+	if v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return nil, "", fmt.Errorf("invalid --cursor value")
+		}
+		offset = n
+	}
+	if offset >= len(in) {
+		return []audit.Event{}, "", nil
+	}
+	if limit <= 0 {
+		return in[offset:], "", nil
+	}
+	end := minInt(offset+limit, len(in))
+	next := ""
+	if end < len(in) {
+		next = strconv.Itoa(end)
+	}
+	return in[offset:end], next, nil
 }
 
 func printIssueUsage() {

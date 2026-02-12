@@ -333,6 +333,28 @@ func TestParseAuditTimeRangeRejectsInvertedRange(t *testing.T) {
 	}
 }
 
+func TestPaginateAuditEvents(t *testing.T) {
+	in := []audit.Event{
+		{Time: "2026-02-12T10:00:00Z", Type: "a"},
+		{Time: "2026-02-12T11:00:00Z", Type: "b"},
+		{Time: "2026-02-12T12:00:00Z", Type: "c"},
+	}
+	page1, next, err := paginateAuditEvents(in, 2, "")
+	if err != nil {
+		t.Fatalf("paginate page1: %v", err)
+	}
+	if len(page1) != 2 || next != "2" {
+		t.Fatalf("unexpected page1 len=%d next=%q", len(page1), next)
+	}
+	page2, next2, err := paginateAuditEvents(in, 2, next)
+	if err != nil {
+		t.Fatalf("paginate page2: %v", err)
+	}
+	if len(page2) != 1 || next2 != "" {
+		t.Fatalf("unexpected page2 len=%d next=%q", len(page2), next2)
+	}
+}
+
 func TestChaosPartitionRejoinDeterministicConvergence(t *testing.T) {
 	base := t.TempDir()
 	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")
