@@ -148,6 +148,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - План SDD-10: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
 - Задачи SDD-10: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
+- Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
@@ -317,6 +318,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD-10 plan: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
 - SDD-10 tasks: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
 - Interactive board smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
+- Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
 - Board live smoke (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
