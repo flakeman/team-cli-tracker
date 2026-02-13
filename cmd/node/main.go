@@ -223,11 +223,12 @@ func runBoard(args []string) {
 		}
 	}
 	state := boardRenderState{
-		viewMode:            strings.ToLower(strings.TrimSpace(*view)),
-		assigneeID:          strings.TrimSpace(*assigneeID),
-		countsOnly:          *countsOnly,
-		interactivePaused:   false,
-		interactiveInterval: *interactiveRefresh,
+		viewMode:                strings.ToLower(strings.TrimSpace(*view)),
+		assigneeID:              strings.TrimSpace(*assigneeID),
+		effectiveViewAssigneeID: strings.TrimSpace(*assigneeID),
+		countsOnly:              *countsOnly,
+		interactivePaused:       false,
+		interactiveInterval:     *interactiveRefresh,
 	}
 	render := func(status string) error {
 		all, err := log.ReadAll()
@@ -239,6 +240,7 @@ func runBoard(args []string) {
 		mode := strings.ToLower(strings.TrimSpace(state.viewMode))
 		switch mode {
 		case "all", "":
+			state.effectiveViewAssigneeID = ""
 		case "mine":
 			target := strings.TrimSpace(state.assigneeID)
 			if target == "" {
@@ -247,6 +249,7 @@ func runBoard(args []string) {
 			if target == "" {
 				return fmt.Errorf("mine view requires --assignee-id or USER_ID")
 			}
+			state.effectiveViewAssigneeID = target
 			board = filterBoardByAssignee(board, target)
 		default:
 			return fmt.Errorf("unsupported --view value: %s", *view)
@@ -257,9 +260,9 @@ func runBoard(args []string) {
 			fmt.Println(string(raw))
 		default:
 			if state.countsOnly {
-				printBoardCounts(*projectID, board, boardAll, len(all), mode, state.assigneeID)
+				printBoardCounts(*projectID, board, boardAll, len(all), mode, resolvedAssigneeForScope(state))
 			} else {
-				printBoardPlain(*projectID, board, boardAll, len(all), mode, state.assigneeID)
+				printBoardPlain(*projectID, board, boardAll, len(all), mode, resolvedAssigneeForScope(state))
 			}
 			if strings.TrimSpace(status) != "" {
 				fmt.Printf("Status: %s\n", strings.TrimSpace(status))
@@ -319,11 +322,12 @@ func runBoard(args []string) {
 }
 
 type boardRenderState struct {
-	viewMode            string
-	assigneeID          string
-	countsOnly          bool
-	interactivePaused   bool
-	interactiveInterval time.Duration
+	viewMode                string
+	assigneeID              string
+	effectiveViewAssigneeID string
+	countsOnly              bool
+	interactivePaused       bool
+	interactiveInterval     time.Duration
 }
 
 type boardInteractiveInput struct {
@@ -411,11 +415,13 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 		case "all":
 			in.state.viewMode = "all"
 			in.state.assigneeID = ""
+			in.state.effectiveViewAssigneeID = ""
 			return false, "view switched to all"
 		case "mine":
 			in.state.viewMode = "mine"
 			if len(cmd.args) > 1 {
 				in.state.assigneeID = strings.TrimSpace(cmd.args[1])
+				in.state.effectiveViewAssigneeID = strings.TrimSpace(cmd.args[1])
 			}
 			return false, "view switched to mine"
 		default:
@@ -3246,6 +3252,16 @@ func filterBoardByAssignee(board map[string][]issueProjection, assignee string) 
 		out[k] = filtered
 	}
 	return out
+}
+
+func resolvedAssigneeForScope(state boardRenderState) string {
+	if strings.ToLower(strings.TrimSpace(state.viewMode)) != "mine" {
+		return ""
+	}
+	if strings.TrimSpace(state.effectiveViewAssigneeID) != "" {
+		return strings.TrimSpace(state.effectiveViewAssigneeID)
+	}
+	return strings.TrimSpace(state.assigneeID)
 }
 
 func printUsage() {

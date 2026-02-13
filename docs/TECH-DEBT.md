@@ -76,9 +76,9 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 3. Tests cover rejection/acceptance behavior parity for interactive vs non-interactive command flows.
 
 ### TD-010 Interactive mine-view identity resolution consistency
-- Status: Open
+- Status: Closed
 - Impact: in `--view mine`, filtering may use fallback env identity while rendered scope label can stay ambiguous, which can mislead operators about what subset is shown.
-- Current state: render path may resolve target assignee from env (`USER_ID`/`USER`) without persisting resolved value in displayed scope metadata.
+- Current state: render path persists and displays effective mine-view assignee in scope metadata (`Scope: mine(<effective-assignee>)`) including env fallback resolution; regression coverage added for resolved assignee behavior.
 - Exit criteria:
 1. Scope label always shows effective assignee used for filtering.
 2. Interactive `view mine` behavior is deterministic and explicit when assignee is omitted.

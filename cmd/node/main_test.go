@@ -429,6 +429,21 @@ func TestTickerChanPaused(t *testing.T) {
 	}
 }
 
+func TestResolvedAssigneeForScope(t *testing.T) {
+	st := boardRenderState{viewMode: "mine", assigneeID: "", effectiveViewAssigneeID: "vova"}
+	if got := resolvedAssigneeForScope(st); got != "vova" {
+		t.Fatalf("got=%q want=%q", got, "vova")
+	}
+	st = boardRenderState{viewMode: "mine", assigneeID: "dev1", effectiveViewAssigneeID: ""}
+	if got := resolvedAssigneeForScope(st); got != "dev1" {
+		t.Fatalf("got=%q want=%q", got, "dev1")
+	}
+	st = boardRenderState{viewMode: "all", assigneeID: "dev1", effectiveViewAssigneeID: "dev1"}
+	if got := resolvedAssigneeForScope(st); got != "" {
+		t.Fatalf("got=%q want empty", got)
+	}
+}
+
 func TestParseBoardInteractiveCommand(t *testing.T) {
 	cases := []struct {
 		in   string
