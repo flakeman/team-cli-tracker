@@ -304,7 +304,7 @@ func TestPrintBoardPlainTableFormat(t *testing.T) {
 	if !strings.Contains(out, "All issues: 3  Open: 2  Done: 1") {
 		t.Fatalf("missing totals header: %s", out)
 	}
-	if !strings.Contains(out, "To Do [1]") || !strings.Contains(out, "In Progress [1]") || !strings.Contains(out, "Done [1]") {
+	if !strings.Contains(out, "To Do [1]") || !strings.Contains(out, "In Progress [1/3]") || !strings.Contains(out, "Done [1/3]") {
 		t.Fatalf("missing column headers: %s", out)
 	}
 	if !strings.Contains(out, "OPS-1 first @unassigned") || !strings.Contains(out, "OPS-2 second @dev1") || !strings.Contains(out, "OPS-3 third @qa1") {

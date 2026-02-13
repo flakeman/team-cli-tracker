@@ -3168,7 +3168,12 @@ func renderBoardPlain(projectID string, board, boardAll map[string][]issueProjec
 	out.WriteString(sep + "\n")
 	headerCells := make([]string, 0, len(cols))
 	for _, c := range cols {
-		h := fmt.Sprintf("%s [%d]", c.Title, len(board[c.Key]))
+		var h string
+		if c.Key == "todo" {
+			h = fmt.Sprintf("%s [%d]", c.Title, len(board[c.Key]))
+		} else {
+			h = fmt.Sprintf("%s [%d/%d]", c.Title, len(board[c.Key]), allTotal)
+		}
 		headerCells = append(headerCells, padOrTrim(h, boardCellWidth))
 	}
 	fmt.Fprintf(&out, "|%s|\n", strings.Join(headerCells, "|"))

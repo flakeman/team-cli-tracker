@@ -56,7 +56,7 @@ Project: OPS  Revision: 7
 Assignee WIP limit: 3
 Total issues: 7  Open: 5  Done: 2
 +----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
-| To Do [2]                        | In Progress [1]                  | Code Review [1]                  | Testing [1]                      | Done [2]                         |
+| To Do [2]                        | In Progress [1/7]                | Code Review [1/7]                | Testing [1/7]                    | Done [2/7]                       |
 +----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
 | OPS-120 Add audit logs @unassign | OPS-104 Fix billing timeout @vla | OPS-101 Add health endpoint @lea | OPS-115 UI regression checks @qa | OPS-097 Update runbook @olga     |
 | OPS-130 Add SLA reminder hooks @ |                                  |                                  |                                  | OPS-099 DB migration cleanup @dm |
@@ -218,7 +218,7 @@ Project: OPS  Revision: 7
 Assignee WIP limit: 3
 Total issues: 7  Open: 5  Done: 2
 +----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
-| To Do [2]                        | In Progress [1]                  | Code Review [1]                  | Testing [1]                      | Done [2]                         |
+| To Do [2]                        | In Progress [1/7]                | Code Review [1/7]                | Testing [1/7]                    | Done [2/7]                       |
 +----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
 | OPS-120 Add audit logs @unassign | OPS-104 Fix billing timeout @vla | OPS-101 Add health endpoint @lea | OPS-115 UI regression checks @qa | OPS-097 Update runbook @olga     |
 | OPS-130 Add SLA reminder hooks @ |                                  |                                  |                                  | OPS-099 DB migration cleanup @dm |
