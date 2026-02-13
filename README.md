@@ -154,6 +154,17 @@ curl -X PUT --data-binary @./spec.pdf "<upload_url_from_initiate>"
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>","filename":"spec.pdf","content_type":"application/pdf","checksum_sha256":"<sha256>"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
+
+# Attachment backend selection on server:
+# local (default): --attachment-backend local
+# s3/minio:
+#   --attachment-backend s3
+#   --attachment-s3-endpoint 127.0.0.1:9000
+#   --attachment-s3-bucket team-cli-attachments
+#   --attachment-s3-access-key minioadmin
+#   --attachment-s3-secret-key minioadmin
+#   --attachment-s3-region us-east-1
+#   --attachment-s3-secure=false
 ```
 
 ### Документация

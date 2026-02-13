@@ -39,6 +39,8 @@ import (
 	"github.com/vladimir/team-cli-tracker/internal/store"
 	"github.com/vladimir/team-cli-tracker/internal/team"
 	"github.com/vladimir/team-cli-tracker/internal/trust"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 func main() {
@@ -1068,6 +1070,13 @@ func runServe(args []string) {
 	discoveryTTL := fs.Duration("discovery-ttl", mustDuration(envOr("DISCOVERY_TTL", "45s"), 45*time.Second), "ttl for discovered peers before prune")
 	enforceKeyRotationPolicy := fs.Bool("enforce-key-rotation-policy", envOr("ENFORCE_KEY_ROTATION_POLICY", "true") == "true", "hard-fail startup if active encryption key exceeds max age")
 	keyRotationMaxAge := fs.Duration("key-rotation-max-age", mustDuration(envOr("KEY_ROTATION_MAX_AGE", "720h"), 720*time.Hour), "maximum allowed active encryption key age before startup fails")
+	attachmentBackend := fs.String("attachment-backend", envOr("ATTACHMENT_BACKEND", "local"), "attachment backend: local|s3")
+	attachmentS3Endpoint := fs.String("attachment-s3-endpoint", envOr("ATTACHMENT_S3_ENDPOINT", ""), "S3 endpoint host:port")
+	attachmentS3Region := fs.String("attachment-s3-region", envOr("ATTACHMENT_S3_REGION", "us-east-1"), "S3 region")
+	attachmentS3Bucket := fs.String("attachment-s3-bucket", envOr("ATTACHMENT_S3_BUCKET", ""), "S3 bucket")
+	attachmentS3AccessKey := fs.String("attachment-s3-access-key", envOr("ATTACHMENT_S3_ACCESS_KEY", ""), "S3 access key")
+	attachmentS3SecretKey := fs.String("attachment-s3-secret-key", envOr("ATTACHMENT_S3_SECRET_KEY", ""), "S3 secret key")
+	attachmentS3Secure := fs.Bool("attachment-s3-secure", envOr("ATTACHMENT_S3_SECURE", "false") == "true", "use HTTPS for S3 endpoint")
 	_ = fs.Parse(args)
 
 	id, err := node.LoadOrCreate(*dataDir, *nodeID)
@@ -1154,6 +1163,35 @@ func runServe(args []string) {
 	if err != nil {
 		fatal(err)
 	}
+	backend := strings.ToLower(strings.TrimSpace(*attachmentBackend))
+	if backend == "" {
+		backend = "local"
+	}
+	var s3Client *minio.Client
+	s3Bucket := strings.TrimSpace(*attachmentS3Bucket)
+	if backend == "s3" {
+		if strings.TrimSpace(*attachmentS3Endpoint) == "" || s3Bucket == "" || strings.TrimSpace(*attachmentS3AccessKey) == "" || strings.TrimSpace(*attachmentS3SecretKey) == "" {
+			fatal(fmt.Errorf("s3 backend requires endpoint, bucket, access key and secret key"))
+		}
+		c, err := minio.New(strings.TrimSpace(*attachmentS3Endpoint), &minio.Options{
+			Creds:  credentials.NewStaticV4(strings.TrimSpace(*attachmentS3AccessKey), strings.TrimSpace(*attachmentS3SecretKey), ""),
+			Secure: *attachmentS3Secure,
+			Region: strings.TrimSpace(*attachmentS3Region),
+		})
+		if err != nil {
+			fatal(err)
+		}
+		exists, err := c.BucketExists(context.Background(), s3Bucket)
+		if err != nil {
+			fatal(err)
+		}
+		if !exists {
+			if err := c.MakeBucket(context.Background(), s3Bucket, minio.MakeBucketOptions{Region: strings.TrimSpace(*attachmentS3Region)}); err != nil {
+				fatal(err)
+			}
+		}
+		s3Client = c
+	}
 	signKey := sha256.Sum256(id.Priv)
 	s := &syncServer{
 		projectID:            *projectID,
@@ -1182,6 +1220,9 @@ func runServe(args []string) {
 		discoveredPeers:      map[string]int64{},
 		peerNodeByURL:        map[string]string{},
 		attachmentSignKey:    signKey[:],
+		attachmentBackend:    backend,
+		attachmentS3Client:   s3Client,
+		attachmentS3Bucket:   s3Bucket,
 	}
 
 	mux := http.NewServeMux()
@@ -1294,6 +1335,9 @@ type syncServer struct {
 	discoveredPeers          map[string]int64
 	peerNodeByURL            map[string]string
 	attachmentSignKey        []byte
+	attachmentBackend        string
+	attachmentS3Client       *minio.Client
+	attachmentS3Bucket       string
 }
 
 type peerSyncState struct {
@@ -2798,6 +2842,25 @@ func (s *syncServer) issueAttachmentInitiate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	attachmentID := fmt.Sprintf("%s-%d", in.IssueID, time.Now().UTC().UnixNano())
+	storageKey := attachmentStorageKey(in.ProjectID, in.IssueID, attachmentID)
+	if s.attachmentBackend == "s3" {
+		if s.attachmentS3Client == nil || strings.TrimSpace(s.attachmentS3Bucket) == "" {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "s3 backend not configured"})
+			return
+		}
+		putURL, err := s.attachmentS3Client.PresignedPutObject(context.Background(), s.attachmentS3Bucket, storageKey, 5*time.Minute)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"attachment_id":  attachmentID,
+			"storage_key":    storageKey,
+			"upload_url":     putURL.String(),
+			"expires_in_sec": 300,
+		})
+		return
+	}
 	token, err := s.signAttachmentToken(attachmentSignedToken{
 		Op:           "upload",
 		ProjectID:    in.ProjectID,
@@ -2811,8 +2874,9 @@ func (s *syncServer) issueAttachmentInitiate(w http.ResponseWriter, r *http.Requ
 	}
 	base := requestBaseURL(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"attachment_id": attachmentID,
-		"upload_url":    base + "/api/v1/attachments/upload?token=" + url.QueryEscape(token),
+		"attachment_id":  attachmentID,
+		"storage_key":    storageKey,
+		"upload_url":     base + "/api/v1/attachments/upload?token=" + url.QueryEscape(token),
 		"expires_in_sec": 300,
 	})
 }
@@ -2843,24 +2907,45 @@ func (s *syncServer) issueAttachmentComplete(w http.ResponseWriter, r *http.Requ
 	}
 	storageKey := attachmentStorageKey(in.ProjectID, in.IssueID, in.AttachmentID)
 	fullPath := filepath.Join(s.dataDir, "attachments", storageKey)
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "uploaded object not found"})
-		return
-	}
-	if in.SizeBytes <= 0 {
-		in.SizeBytes = info.Size()
-	}
 	if in.Title == "" {
 		in.Title = in.Filename
 	}
 	if in.ContentType == "" {
 		in.ContentType = "application/octet-stream"
 	}
-	computedChecksum, err := fileSHA256Hex(fullPath)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	var computedChecksum string
+	if s.attachmentBackend == "s3" {
+		if s.attachmentS3Client == nil || strings.TrimSpace(s.attachmentS3Bucket) == "" {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "s3 backend not configured"})
+			return
+		}
+		objInfo, err := s.attachmentS3Client.StatObject(context.Background(), s.attachmentS3Bucket, storageKey, minio.StatObjectOptions{})
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "uploaded object not found"})
+			return
+		}
+		if in.SizeBytes <= 0 {
+			in.SizeBytes = objInfo.Size
+		}
+		computedChecksum, err = s.s3ObjectSHA256(storageKey)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "uploaded object not found"})
+			return
+		}
+		if in.SizeBytes <= 0 {
+			in.SizeBytes = info.Size()
+		}
+		computedChecksum, err = fileSHA256Hex(fullPath)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	if in.ChecksumSHA256 != "" && in.ChecksumSHA256 != computedChecksum {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "checksum mismatch"})
@@ -2998,6 +3083,25 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 	for _, it := range items {
 		if it.ID == in.AttachmentID {
 			if strings.TrimSpace(it.StorageKey) != "" {
+				if s.attachmentBackend == "s3" {
+					if s.attachmentS3Client == nil || strings.TrimSpace(s.attachmentS3Bucket) == "" {
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "s3 backend not configured"})
+						return
+					}
+					getURL, err := s.attachmentS3Client.PresignedGetObject(context.Background(), s.attachmentS3Bucket, it.StorageKey, 5*time.Minute, nil)
+					if err != nil {
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+						return
+					}
+					writeJSON(w, http.StatusOK, map[string]any{
+						"attachment_id":  it.ID,
+						"title":          it.Title,
+						"url":            getURL.String(),
+						"expires_in_sec": 300,
+						"checksum_sha256": it.ChecksumSHA256,
+					})
+					return
+				}
 				token, err := s.signAttachmentToken(attachmentSignedToken{
 					Op:           "download",
 					ProjectID:    in.ProjectID,
@@ -3027,6 +3131,10 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *syncServer) attachmentsUpload(w http.ResponseWriter, r *http.Request) {
+	if s.attachmentBackend == "s3" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "use presigned s3 upload_url"})
+		return
+	}
 	if r.Method != http.MethodPut && r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
@@ -3069,6 +3177,10 @@ func (s *syncServer) attachmentsUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *syncServer) attachmentsDownload(w http.ResponseWriter, r *http.Request) {
+	if s.attachmentBackend == "s3" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "use presigned s3 download url"})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
@@ -4205,6 +4317,22 @@ func fileSHA256Hex(path string) (string, error) {
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func (s *syncServer) s3ObjectSHA256(storageKey string) (string, error) {
+	if s.attachmentS3Client == nil || strings.TrimSpace(s.attachmentS3Bucket) == "" {
+		return "", fmt.Errorf("s3 backend not configured")
+	}
+	obj, err := s.attachmentS3Client.GetObject(context.Background(), s.attachmentS3Bucket, storageKey, minio.GetObjectOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer obj.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, obj); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
