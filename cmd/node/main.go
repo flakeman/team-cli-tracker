@@ -1247,6 +1247,7 @@ func runServe(args []string) {
 	register("/issue/attachment/list", s.withAuthRoles(s.issueAttachmentList, "admin", "lead", "dev", "qa", "viewer"))
 	register("/issue/attachment/open", s.withAuthRoles(s.issueAttachmentOpen, "admin", "lead", "dev", "qa", "viewer"))
 	register("/issue/attachment/verify", s.withAuthRoles(s.issueAttachmentVerify, "admin", "lead", "dev", "qa", "viewer"))
+	register("/issue/attachment/verify-all", s.withAuthRoles(s.issueAttachmentVerifyAll, "admin", "lead"))
 	register("/attachments/upload", s.attachmentsUpload)
 	register("/attachments/download", s.attachmentsDownload)
 	register("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
@@ -1411,6 +1412,15 @@ type issueAttachmentVerifyRequest struct {
 	ProjectID    string `json:"project_id"`
 	IssueID      string `json:"issue_id"`
 	AttachmentID string `json:"attachment_id"`
+}
+
+type attachmentVerificationResult struct {
+	IssueID         string `json:"issue_id"`
+	AttachmentID    string `json:"attachment_id"`
+	Match           bool   `json:"match"`
+	StoredSHA256    string `json:"stored_sha256"`
+	ComputedSHA256  string `json:"computed_sha256"`
+	Error           string `json:"error,omitempty"`
 }
 
 type attachmentSignedToken struct {
@@ -3173,48 +3183,88 @@ func (s *syncServer) issueAttachmentVerify(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
 		return
 	}
-	stored := strings.ToLower(strings.TrimSpace(picked.ChecksumSHA256))
-	if stored == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "checksum not set for attachment"})
+	result := s.verifyAttachmentProjection(in.IssueID, *picked)
+	if strings.TrimSpace(result.Error) != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": result.Error})
 		return
 	}
-	var computed string
-	if strings.TrimSpace(picked.StorageKey) != "" {
-		if s.attachmentBackend == "s3" {
-			computed, err = s.s3ObjectSHA256(picked.StorageKey)
-		} else {
-			fullPath := filepath.Join(s.dataDir, "attachments", picked.StorageKey)
-			computed, err = fileSHA256Hex(fullPath)
-		}
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file not accessible"})
-			return
-		}
-	} else {
-		// URL-only mode: integrity is metadata-only, binary is external.
-		computed = stored
-	}
-	match := (computed == stored)
 	if s.auditManager != nil {
 		status := "ok"
-		if !match {
+		if !result.Match {
 			status = "error"
 		}
 		s.auditManager.Append("attachment.verify", "api", status, map[string]any{
 			"project_id":     in.ProjectID,
 			"issue_id":       in.IssueID,
 			"attachment_id":  in.AttachmentID,
-			"stored_sha256":  stored,
-			"computed_sha256": computed,
+			"stored_sha256":  result.StoredSHA256,
+			"computed_sha256": result.ComputedSHA256,
 			"backend":        s.attachmentBackend,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"attachment_id":   in.AttachmentID,
-		"match":           match,
-		"stored_sha256":   stored,
-		"computed_sha256": computed,
+		"match":           result.Match,
+		"stored_sha256":   result.StoredSHA256,
+		"computed_sha256": result.ComputedSHA256,
 		"backend":         s.attachmentBackend,
+	})
+}
+
+func (s *syncServer) issueAttachmentVerifyAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		projectID = s.projectID
+	}
+	issueID := strings.TrimSpace(r.URL.Query().Get("issue_id"))
+	if projectID != s.projectID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid project_id"})
+		return
+	}
+	all, err := listAllIssueAttachments(s.log, projectID, issueID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	results := make([]attachmentVerificationResult, 0, len(all))
+	mismatch := 0
+	errorsCount := 0
+	for _, item := range all {
+		res := s.verifyAttachmentProjection(item.IssueID, item.Attachment)
+		if !res.Match {
+			mismatch++
+		}
+		if strings.TrimSpace(res.Error) != "" {
+			errorsCount++
+		}
+		results = append(results, res)
+	}
+	if s.auditManager != nil {
+		status := "ok"
+		if mismatch > 0 || errorsCount > 0 {
+			status = "error"
+		}
+		s.auditManager.Append("attachment.verify_all", "api", status, map[string]any{
+			"project_id": projectID,
+			"issue_id":   issueID,
+			"checked":    len(results),
+			"mismatch":   mismatch,
+			"errors":     errorsCount,
+			"backend":    s.attachmentBackend,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project_id": projectID,
+		"issue_id":   issueID,
+		"checked":    len(results),
+		"mismatch":   mismatch,
+		"errors":     errorsCount,
+		"backend":    s.attachmentBackend,
+		"results":    results,
 	})
 }
 
@@ -4052,6 +4102,40 @@ func listIssueAttachments(log *store.EventLog, projectID, issueID string) ([]iss
 	return []issueAttachmentProjection{}, nil
 }
 
+type issueAttachmentWithIssue struct {
+	IssueID    string
+	Attachment issueAttachmentProjection
+}
+
+func listAllIssueAttachments(log *store.EventLog, projectID, issueID string) ([]issueAttachmentWithIssue, error) {
+	all, err := log.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	board := projectBoardFromEvents(projectID, all)
+	out := make([]issueAttachmentWithIssue, 0)
+	for _, col := range board {
+		for _, it := range col {
+			if issueID != "" && it.ID != issueID {
+				continue
+			}
+			for _, att := range it.Attachments {
+				out = append(out, issueAttachmentWithIssue{
+					IssueID:    it.ID,
+					Attachment: att,
+				})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IssueID != out[j].IssueID {
+			return out[i].IssueID < out[j].IssueID
+		}
+		return out[i].Attachment.ID < out[j].Attachment.ID
+	})
+	return out, nil
+}
+
 func printBoardPlain(projectID string, board, boardAll map[string][]issueProjection, revision int, viewMode, assigneeID string) {
 	fmt.Print(renderBoardPlain(projectID, board, boardAll, revision, viewMode, assigneeID))
 }
@@ -4424,6 +4508,41 @@ func (s *syncServer) s3ObjectSHA256(storageKey string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func (s *syncServer) verifyAttachmentProjection(issueID string, att issueAttachmentProjection) attachmentVerificationResult {
+	res := attachmentVerificationResult{
+		IssueID:      strings.TrimSpace(issueID),
+		AttachmentID: strings.TrimSpace(att.ID),
+		Match:        false,
+	}
+	stored := strings.ToLower(strings.TrimSpace(att.ChecksumSHA256))
+	res.StoredSHA256 = stored
+	if stored == "" {
+		res.Error = "checksum not set for attachment"
+		return res
+	}
+	if strings.TrimSpace(att.StorageKey) == "" {
+		// URL-only mode: binary is external; compare metadata checksum only.
+		res.ComputedSHA256 = stored
+		res.Match = true
+		return res
+	}
+	var computed string
+	var err error
+	if s.attachmentBackend == "s3" {
+		computed, err = s.s3ObjectSHA256(att.StorageKey)
+	} else {
+		fullPath := filepath.Join(s.dataDir, "attachments", att.StorageKey)
+		computed, err = fileSHA256Hex(fullPath)
+	}
+	if err != nil {
+		res.Error = "file not accessible"
+		return res
+	}
+	res.ComputedSHA256 = computed
+	res.Match = (computed == stored)
+	return res
 }
 
 func (s *syncServer) signAttachmentToken(claims attachmentSignedToken) (string, error) {

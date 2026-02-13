@@ -160,6 +160,10 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
   -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/verify"
 
+# verify all attachments in project (or pass issue_id to scope)
+curl -H "Authorization: Bearer <token>" \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/verify-all?project_id=OPS"
+
 # Attachment backend selection on server:
 # local (default): --attachment-backend local
 # s3/minio:
