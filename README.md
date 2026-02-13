@@ -124,6 +124,10 @@ go run ./cmd/node audit verify-integrity
 
 # API выгрузка аудита (admin/lead token)
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/export?from=2026-02-12T00:00:00Z&to=2026-02-12T23:59:59Z&user=vova,qa&limit=100&cursor=0"
+
+# Master API (v1 namespace, совместим с текущими endpoint'ами)
+curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/team/list"
+curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/security/audit/export?all=1"
 ```
 
 ### Документация
@@ -150,6 +154,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD production deployment и onboarding реальных пользователей: `docs/SDD-11-production-deployment-and-real-user-onboarding.md`
 - План SDD-11: `docs/SDD-11-production-deployment-and-real-user-onboarding.plan.md`
 - Задачи SDD-11: `docs/SDD-11-production-deployment-and-real-user-onboarding.tasks.md`
+- SDD Master API + file attachments: `docs/SDD-12-master-api-and-attachments.md`
+- План SDD-12: `docs/SDD-12-master-api-and-attachments.plan.md`
+- Задачи SDD-12: `docs/SDD-12-master-api-and-attachments.tasks.md`
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`

@@ -111,6 +111,13 @@ func runIssueCreate(args []string) {
 	if *projectID == "" || *issueID == "" || strings.TrimSpace(*summary) == "" {
 		fatal(fmt.Errorf("project-id, issue-id and summary are required"))
 	}
+	exists, err := issueExistsInStore(*dataDir, *projectID, *issueID)
+	if err != nil {
+		fatal(err)
+	}
+	if exists {
+		fatal(fmt.Errorf("issue %s already exists", strings.TrimSpace(*issueID)))
+	}
 	payload := map[string]string{
 		"status":     "todo",
 		"summary":    strings.TrimSpace(*summary),
@@ -431,22 +438,38 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 			return false, "view must be all or mine"
 		}
 	case "create":
-		if strings.TrimSpace(in.policyURL) != "" {
-			if err := requestIssueCreateProtected(in.policyURL, in.projectID, cmd.args[0], cmd.args[1]); err != nil {
+		issueID := strings.TrimSpace(cmd.args[0])
+		summary := strings.TrimSpace(cmd.args[1])
+		if issueID == "" {
+			nextID, err := nextIssueIDInStore(in.dataDir, in.projectID)
+			if err != nil {
 				return false, err.Error()
 			}
-			return false, "created " + cmd.args[0]
+			issueID = nextID
 		}
-		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.create", map[string]string{
+		if strings.TrimSpace(in.policyURL) != "" {
+			if err := requestIssueCreateProtected(in.policyURL, in.projectID, issueID, summary); err != nil {
+				return false, err.Error()
+			}
+			return false, "created " + issueID
+		}
+		exists, err := issueExistsInStore(in.dataDir, in.projectID, issueID)
+		if err != nil {
+			return false, err.Error()
+		}
+		if exists {
+			return false, "issue already exists: " + issueID
+		}
+		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, issueID, "issue.create", map[string]string{
 			"status":     "todo",
-			"summary":    cmd.args[1],
+			"summary":    summary,
 			"priority":   "medium",
 			"assignee":   "",
 			"created_by": in.nodeID,
 		}); err != nil {
 			return false, err.Error()
 		}
-		return false, "created " + cmd.args[0]
+		return false, "created " + issueID
 	case "move":
 		if err := validateTransitionProtected(in.policyURL, in.projectID, cmd.args[0], cmd.args[1], cmd.args[2]); err != nil {
 			return false, err.Error()
@@ -483,7 +506,9 @@ func interactiveHelpText() string {
 	return strings.Join([]string{
 		"Interactive commands:",
 		"  help                          - show this help",
-		"  create <ISSUE_ID> <summary>   - create issue in To Do",
+		"  create <summary>              - create issue with auto ID in To Do",
+		"    example: create Fix auth timeout",
+		"  create <ISSUE_ID> <summary>   - create issue with explicit ID in To Do",
 		"    example: create OPS-901 Fix auth timeout",
 		"  move <ISSUE_ID> <from> <to>   - move issue across workflow",
 		"    example: move OPS-901 todo in_progress",
@@ -520,11 +545,20 @@ func parseBoardInteractiveCommand(raw string) (boardInteractiveCommand, error) {
 		}
 		return boardInteractiveCommand{name: "view", args: args}, nil
 	case "create":
-		x := strings.SplitN(line, " ", 3)
-		if len(x) < 3 || strings.TrimSpace(x[1]) == "" || strings.TrimSpace(x[2]) == "" {
-			return boardInteractiveCommand{}, fmt.Errorf("usage: create <ISSUE_ID> <summary>")
+		payload := strings.TrimSpace(strings.TrimPrefix(line, parts[0]))
+		if payload == "" {
+			return boardInteractiveCommand{}, fmt.Errorf("usage: create <summary> | create <ISSUE_ID> <summary>")
 		}
-		return boardInteractiveCommand{name: "create", args: []string{strings.TrimSpace(x[1]), strings.TrimSpace(x[2])}}, nil
+		createParts := strings.Fields(payload)
+		if len(createParts) >= 2 && looksLikeIssueID(createParts[0]) {
+			issueID := strings.TrimSpace(createParts[0])
+			summary := strings.TrimSpace(strings.TrimPrefix(payload, createParts[0]))
+			if summary == "" {
+				return boardInteractiveCommand{}, fmt.Errorf("usage: create <summary> | create <ISSUE_ID> <summary>")
+			}
+			return boardInteractiveCommand{name: "create", args: []string{issueID, summary}}, nil
+		}
+		return boardInteractiveCommand{name: "create", args: []string{"", payload}}, nil
 	case "move":
 		if len(parts) != 4 {
 			return boardInteractiveCommand{}, fmt.Errorf("usage: move <ISSUE_ID> <from> <to>")
@@ -1143,48 +1177,53 @@ func runServe(args []string) {
 	}
 
 	mux := http.NewServeMux()
+	register := func(path string, h http.HandlerFunc) {
+		mux.HandleFunc(path, h)
+		mux.HandleFunc("/api/v1"+path, h)
+	}
 	mux.HandleFunc("/healthz", s.healthz)
-	mux.HandleFunc("/sync/clock", s.withAuthAny(s.syncClock))
-	mux.HandleFunc("/sync/events", s.withAuthAny(s.syncEvents))
-	mux.HandleFunc("/sync/ingest", s.withAuthAny(s.syncIngest))
-	mux.HandleFunc("/sync/peers", s.withAuthAny(s.syncPeers))
-	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
-	mux.HandleFunc("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
-	mux.HandleFunc("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
-	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
-	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
-	mux.HandleFunc("/raft/vote-team-onboard", s.withAuthRoles(s.raftVoteTeamOnboard, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-team-onboard", s.withAuthRoles(s.raftValidateTeamOnboard, "admin", "lead"))
-	mux.HandleFunc("/raft/vote-team-role-change", s.withAuthRoles(s.raftVoteTeamRoleChange, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-team-role-change", s.withAuthRoles(s.raftValidateTeamRoleChange, "admin", "lead"))
-	mux.HandleFunc("/raft/vote-trust-invite", s.withAuthRoles(s.raftVoteTrustInvite, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-trust-invite", s.withAuthRoles(s.raftValidateTrustInvite, "admin", "lead"))
-	mux.HandleFunc("/raft/vote-trust-revoke", s.withAuthRoles(s.raftVoteTrustRevoke, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-trust-revoke", s.withAuthRoles(s.raftValidateTrustRevoke, "admin", "lead"))
-	mux.HandleFunc("/raft/vote-governance-node-role", s.withAuthRoles(s.raftVoteGovernanceNodeRole, "admin", "lead"))
-	mux.HandleFunc("/raft/validate-governance-node-role", s.withAuthRoles(s.raftValidateGovernanceNodeRole, "admin", "lead"))
-	mux.HandleFunc("/metrics", s.metrics)
-	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
-	mux.HandleFunc("/trust/join", s.withAuthAny(s.trustJoin))
-	mux.HandleFunc("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
-	mux.HandleFunc("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
-	mux.HandleFunc("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
-	mux.HandleFunc("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
-	mux.HandleFunc("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
-	mux.HandleFunc("/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
-	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
-	mux.HandleFunc("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
-	mux.HandleFunc("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
-	mux.HandleFunc("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
-	mux.HandleFunc("/security/audit/export", s.withAuthRoles(s.securityAuditExport, "admin", "lead"))
-	mux.HandleFunc("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
-	mux.HandleFunc("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
-	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
-	mux.HandleFunc("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
-	mux.HandleFunc("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
+	mux.HandleFunc("/api/v1/healthz", s.healthz)
+	register("/sync/clock", s.withAuthAny(s.syncClock))
+	register("/sync/events", s.withAuthAny(s.syncEvents))
+	register("/sync/ingest", s.withAuthAny(s.syncIngest))
+	register("/sync/peers", s.withAuthAny(s.syncPeers))
+	register("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
+	register("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
+	register("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
+	register("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
+	register("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
+	register("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
+	register("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
+	register("/raft/validate-team-offboard", s.withAuthRoles(s.raftValidateTeamOffboard, "admin", "lead"))
+	register("/raft/vote-team-onboard", s.withAuthRoles(s.raftVoteTeamOnboard, "admin", "lead"))
+	register("/raft/validate-team-onboard", s.withAuthRoles(s.raftValidateTeamOnboard, "admin", "lead"))
+	register("/raft/vote-team-role-change", s.withAuthRoles(s.raftVoteTeamRoleChange, "admin", "lead"))
+	register("/raft/validate-team-role-change", s.withAuthRoles(s.raftValidateTeamRoleChange, "admin", "lead"))
+	register("/raft/vote-trust-invite", s.withAuthRoles(s.raftVoteTrustInvite, "admin", "lead"))
+	register("/raft/validate-trust-invite", s.withAuthRoles(s.raftValidateTrustInvite, "admin", "lead"))
+	register("/raft/vote-trust-revoke", s.withAuthRoles(s.raftVoteTrustRevoke, "admin", "lead"))
+	register("/raft/validate-trust-revoke", s.withAuthRoles(s.raftValidateTrustRevoke, "admin", "lead"))
+	register("/raft/vote-governance-node-role", s.withAuthRoles(s.raftVoteGovernanceNodeRole, "admin", "lead"))
+	register("/raft/validate-governance-node-role", s.withAuthRoles(s.raftValidateGovernanceNodeRole, "admin", "lead"))
+	register("/metrics", s.metrics)
+	register("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
+	register("/trust/join", s.withAuthAny(s.trustJoin))
+	register("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
+	register("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
+	register("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
+	register("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
+	register("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
+	register("/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
+	register("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
+	register("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
+	register("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
+	register("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
+	register("/security/audit/export", s.withAuthRoles(s.securityAuditExport, "admin", "lead"))
+	register("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
+	register("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
+	register("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
+	register("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
+	register("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
 
 	go s.syncLoop(*tick)
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
@@ -2614,6 +2653,15 @@ func (s *syncServer) issueCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
 		return
 	}
+	all, err := s.log.ReadAll()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if issueExistsInEvents(in.ProjectID, strings.TrimSpace(in.IssueID), all) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "issue already exists"})
+		return
+	}
 	if strings.TrimSpace(in.Priority) == "" {
 		in.Priority = "medium"
 	}
@@ -3080,6 +3128,87 @@ func appendIssueEventWithLog(log *store.EventLog, id node.Identity, projectID, i
 		return err
 	}
 	return log.Append(e)
+}
+
+func issueExistsInStore(dataDir, projectID, issueID string) (bool, error) {
+	log, err := store.Open(dataDir)
+	if err != nil {
+		return false, err
+	}
+	all, err := log.ReadAll()
+	if err != nil {
+		return false, err
+	}
+	return issueExistsInEvents(projectID, issueID, all), nil
+}
+
+func nextIssueIDInStore(dataDir, projectID string) (string, error) {
+	log, err := store.Open(dataDir)
+	if err != nil {
+		return "", err
+	}
+	all, err := log.ReadAll()
+	if err != nil {
+		return "", err
+	}
+	return nextIssueIDInEvents(projectID, all), nil
+}
+
+func nextIssueIDInEvents(projectID string, all []events.SignedEvent) string {
+	pid := strings.TrimSpace(projectID)
+	maxN := 0
+	prefix := pid + "-"
+	for _, e := range all {
+		if e.ProjectID != pid {
+			continue
+		}
+		id := strings.TrimSpace(e.EntityID)
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(id, prefix)
+		n, err := strconv.Atoi(suffix)
+		if err != nil {
+			continue
+		}
+		if n > maxN {
+			maxN = n
+		}
+	}
+	return fmt.Sprintf("%s-%d", pid, maxN+1)
+}
+
+func issueExistsInEvents(projectID, issueID string, all []events.SignedEvent) bool {
+	pid := strings.TrimSpace(projectID)
+	iid := strings.TrimSpace(issueID)
+	if pid == "" || iid == "" {
+		return false
+	}
+	for _, e := range all {
+		if e.ProjectID != pid {
+			continue
+		}
+		if e.EntityID != iid {
+			continue
+		}
+		if e.Type == "issue.create" {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeIssueID(s string) bool {
+	x := strings.TrimSpace(s)
+	parts := strings.Split(x, "-")
+	if len(parts) != 2 {
+		return false
+	}
+	if parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	_, err := strconv.Atoi(parts[1])
+	return err == nil
 }
 
 type issueProjection struct {
@@ -4422,6 +4551,9 @@ func (s *syncServer) allowRequest(r *http.Request) bool {
 
 func (s *syncServer) rateLimitTier(path string) string {
 	path = strings.ToLower(strings.TrimSpace(path))
+	if strings.HasPrefix(path, "/api/v1/") {
+		path = strings.TrimPrefix(path, "/api/v1")
+	}
 	switch {
 	case strings.HasPrefix(path, "/raft/"):
 		return "sensitive"

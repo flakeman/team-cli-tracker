@@ -75,3 +75,23 @@
    - incremental sync,
    - conflict policy with audit evidence.
 4. Integration smoke on 3 VPS includes Jira sync + webhook delivery checks.
+
+## Milestone M5 (Planned) - Master API And Attachments
+
+### Scope
+- Introduce unified `Master API` namespace (`/api/v1/*`) as primary control plane.
+- Ensure API parity for all major CLI flows:
+  - issues, team, trust, governance, auth, audit.
+- Add attachment support:
+  - file upload lifecycle,
+  - attachment metadata in event log,
+  - secure file access via short-lived URLs.
+
+### Storage Decision
+- Binary files in S3-compatible object storage.
+- Only metadata + checksum in replicated event log.
+
+### Exit Criteria
+1. Full management of participants and issue actions via API without CLI fallback.
+2. Attachments can be added/listed/opened/soft-removed with RBAC and audit trace.
+3. 3-VPS smoke includes attachment operations and integrity evidence.
