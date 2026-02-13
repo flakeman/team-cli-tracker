@@ -77,6 +77,9 @@ go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
 # быстрая сводка по количеству задач в столбцах
 go run ./cmd/node board --project-id OPS --counts-only
 
+# интерактивная сессия доски (команды внутри: help/create/move/comment/view/counts/quit)
+go run ./cmd/node board --project-id OPS --interactive --refresh 2s
+
 # вывести машиночитаемый JSON
 go run ./cmd/node board --project-id OPS -format json
 
@@ -233,6 +236,9 @@ go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
 
 # counts-only summary
 go run ./cmd/node board --project-id OPS --counts-only
+
+# interactive board session (in-session commands: help/create/move/comment/view/counts/quit)
+go run ./cmd/node board --project-id OPS --interactive --refresh 2s
 
 # machine-readable output
 go run ./cmd/node board --project-id OPS -format json

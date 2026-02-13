@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -175,10 +176,12 @@ func runBoard(args []string) {
 	fs := flag.NewFlagSet("board", flag.ExitOnError)
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier (interactive commands)")
 	format := fs.String("format", "plain", "plain|json")
 	view := fs.String("view", "all", "all|mine")
 	assigneeID := fs.String("assignee-id", envOr("BOARD_ASSIGNEE_ID", ""), "assignee id for mine view")
 	countsOnly := fs.Bool("counts-only", false, "print only column counts (plain mode)")
+	interactive := fs.Bool("interactive", false, "interactive board session with embedded commands (plain mode)")
 	once := fs.Bool("once", false, "print once and exit (plain mode defaults to live updates)")
 	refresh := fs.Duration("refresh", mustDuration(envOr("BOARD_REFRESH", "2s"), 2*time.Second), "live board refresh interval")
 	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs for board sync")
@@ -192,6 +195,9 @@ func runBoard(args []string) {
 	}
 	if strings.ToLower(strings.TrimSpace(*format)) == "json" {
 		*once = true
+	}
+	if *interactive && strings.ToLower(strings.TrimSpace(*format)) != "plain" {
+		fatal(fmt.Errorf("interactive mode is supported only for plain format"))
 	}
 
 	log, err := store.Open(*dataDir)
@@ -215,17 +221,22 @@ func runBoard(args []string) {
 			_ = syncHelper.pullFromPeer(peer)
 		}
 	}
-	render := func() error {
+	state := boardRenderState{
+		viewMode:   strings.ToLower(strings.TrimSpace(*view)),
+		assigneeID: strings.TrimSpace(*assigneeID),
+		countsOnly: *countsOnly,
+	}
+	render := func(status string) error {
 		all, err := log.ReadAll()
 		if err != nil {
 			return err
 		}
 		board := projectBoardFromEvents(*projectID, all)
-		mode := strings.ToLower(strings.TrimSpace(*view))
+		mode := strings.ToLower(strings.TrimSpace(state.viewMode))
 		switch mode {
 		case "all", "":
 		case "mine":
-			target := strings.TrimSpace(*assigneeID)
+			target := strings.TrimSpace(state.assigneeID)
 			if target == "" {
 				target = strings.TrimSpace(envOr("USER_ID", envOr("USER", "")))
 			}
@@ -241,10 +252,13 @@ func runBoard(args []string) {
 			raw, _ := json.MarshalIndent(board, "", "  ")
 			fmt.Println(string(raw))
 		default:
-			if *countsOnly {
+			if state.countsOnly {
 				printBoardCounts(*projectID, board, len(all))
 			} else {
 				printBoardPlain(*projectID, board, len(all))
+			}
+			if strings.TrimSpace(status) != "" {
+				fmt.Printf("Status: %s\n", strings.TrimSpace(status))
 			}
 		}
 		return nil
@@ -252,7 +266,7 @@ func runBoard(args []string) {
 
 	syncOnce()
 	if *once {
-		if err := render(); err != nil {
+		if err := render(""); err != nil {
 			fatal(err)
 		}
 		return
@@ -263,14 +277,31 @@ func runBoard(args []string) {
 	if *refresh <= 0 {
 		*refresh = 2 * time.Second
 	}
+	if *interactive {
+		*refresh = maxDuration(*refresh, 2*time.Second)
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	t := time.NewTicker(*refresh)
 	defer t.Stop()
+	if *interactive {
+		runBoardInteractiveLoop(boardInteractiveInput{
+			projectID: *projectID,
+			nodeID:    *nodeID,
+			dataDir:   *dataDir,
+			log:       log,
+			syncOnce:  syncOnce,
+			refresh:   *refresh,
+			render:    render,
+			state:     &state,
+			stop:      stop,
+		})
+		return
+	}
 	for {
 		syncOnce()
 		fmt.Print("\033[H\033[2J")
-		if err := render(); err != nil {
+		if err := render(""); err != nil {
 			fatal(err)
 		}
 		select {
@@ -278,6 +309,173 @@ func runBoard(args []string) {
 		case <-stop:
 			return
 		}
+	}
+}
+
+type boardRenderState struct {
+	viewMode   string
+	assigneeID string
+	countsOnly bool
+}
+
+type boardInteractiveInput struct {
+	projectID string
+	nodeID    string
+	dataDir   string
+	log       *store.EventLog
+	syncOnce  func()
+	refresh   time.Duration
+	render    func(status string) error
+	state     *boardRenderState
+	stop      chan os.Signal
+}
+
+type boardInteractiveCommand struct {
+	name string
+	args []string
+}
+
+func runBoardInteractiveLoop(in boardInteractiveInput) {
+	cmdCh := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			cmdCh <- sc.Text()
+		}
+		close(cmdCh)
+	}()
+	status := "interactive mode: help | create | move | comment | view | counts | quit"
+	t := time.NewTicker(in.refresh)
+	defer t.Stop()
+	for {
+		in.syncOnce()
+		fmt.Print("\033[H\033[2J")
+		if err := in.render(status); err != nil {
+			fatal(err)
+		}
+		fmt.Println("Command> ")
+		select {
+		case <-in.stop:
+			return
+		case <-t.C:
+			continue
+		case raw, ok := <-cmdCh:
+			if !ok {
+				return
+			}
+			quit, msg := applyBoardInteractiveCommand(strings.TrimSpace(raw), in)
+			status = msg
+			if quit {
+				return
+			}
+		}
+	}
+}
+
+func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, string) {
+	cmd, err := parseBoardInteractiveCommand(raw)
+	if err != nil {
+		return false, err.Error()
+	}
+	switch cmd.name {
+	case "help":
+		return false, "commands: create <id> <summary> | move <id> <from> <to> | comment <id> <text> | view all|mine [assignee] | counts | table | quit"
+	case "quit":
+		return true, "bye"
+	case "counts":
+		in.state.countsOnly = true
+		return false, "counts-only view enabled"
+	case "table":
+		in.state.countsOnly = false
+		return false, "table view enabled"
+	case "view":
+		mode := strings.ToLower(strings.TrimSpace(cmd.args[0]))
+		switch mode {
+		case "all":
+			in.state.viewMode = "all"
+			in.state.assigneeID = ""
+			return false, "view switched to all"
+		case "mine":
+			in.state.viewMode = "mine"
+			if len(cmd.args) > 1 {
+				in.state.assigneeID = strings.TrimSpace(cmd.args[1])
+			}
+			return false, "view switched to mine"
+		default:
+			return false, "view must be all or mine"
+		}
+	case "create":
+		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.create", map[string]string{
+			"status":     "todo",
+			"summary":    cmd.args[1],
+			"priority":   "medium",
+			"assignee":   "",
+			"created_by": in.nodeID,
+		}); err != nil {
+			return false, err.Error()
+		}
+		return false, "created " + cmd.args[0]
+	case "move":
+		if err := validateWorkflowTransition(cmd.args[1], cmd.args[2]); err != nil {
+			return false, err.Error()
+		}
+		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.transition", map[string]string{
+			"from": cmd.args[1],
+			"to":   cmd.args[2],
+		}); err != nil {
+			return false, err.Error()
+		}
+		return false, "moved " + cmd.args[0] + " " + cmd.args[1] + "->" + cmd.args[2]
+	case "comment":
+		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.comment", map[string]string{
+			"text": cmd.args[1],
+		}); err != nil {
+			return false, err.Error()
+		}
+		return false, "commented " + cmd.args[0]
+	default:
+		return false, "unsupported command"
+	}
+}
+
+func parseBoardInteractiveCommand(raw string) (boardInteractiveCommand, error) {
+	line := strings.TrimSpace(raw)
+	if line == "" {
+		return boardInteractiveCommand{}, fmt.Errorf("empty command")
+	}
+	parts := strings.Fields(line)
+	name := strings.ToLower(parts[0])
+	switch name {
+	case "help", "quit", "counts", "table":
+		return boardInteractiveCommand{name: name}, nil
+	case "view":
+		if len(parts) < 2 {
+			return boardInteractiveCommand{}, fmt.Errorf("usage: view all|mine [assignee]")
+		}
+		args := []string{parts[1]}
+		if len(parts) > 2 {
+			args = append(args, parts[2])
+		}
+		return boardInteractiveCommand{name: "view", args: args}, nil
+	case "create":
+		x := strings.SplitN(line, " ", 3)
+		if len(x) < 3 || strings.TrimSpace(x[1]) == "" || strings.TrimSpace(x[2]) == "" {
+			return boardInteractiveCommand{}, fmt.Errorf("usage: create <ISSUE_ID> <summary>")
+		}
+		return boardInteractiveCommand{name: "create", args: []string{strings.TrimSpace(x[1]), strings.TrimSpace(x[2])}}, nil
+	case "move":
+		if len(parts) != 4 {
+			return boardInteractiveCommand{}, fmt.Errorf("usage: move <ISSUE_ID> <from> <to>")
+		}
+		return boardInteractiveCommand{name: "move", args: []string{parts[1], parts[2], parts[3]}}, nil
+	case "comment":
+		x := strings.SplitN(line, " ", 3)
+		if len(x) < 3 || strings.TrimSpace(x[1]) == "" || strings.TrimSpace(x[2]) == "" {
+			return boardInteractiveCommand{}, fmt.Errorf("usage: comment <ISSUE_ID> <text>")
+		}
+		return boardInteractiveCommand{name: "comment", args: []string{strings.TrimSpace(x[1]), strings.TrimSpace(x[2])}}, nil
+	default:
+		return boardInteractiveCommand{}, fmt.Errorf("unknown command: %s", name)
 	}
 }
 
@@ -4041,6 +4239,13 @@ func mustDuration(raw string, fallback time.Duration) time.Duration {
 
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
 		return a
 	}
 	return b

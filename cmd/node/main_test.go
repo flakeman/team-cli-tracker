@@ -407,6 +407,42 @@ func TestPrintBoardCounts(t *testing.T) {
 	}
 }
 
+func TestParseBoardInteractiveCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		name string
+		args int
+		ok   bool
+	}{
+		{in: "help", name: "help", args: 0, ok: true},
+		{in: "quit", name: "quit", args: 0, ok: true},
+		{in: "counts", name: "counts", args: 0, ok: true},
+		{in: "view mine vova", name: "view", args: 2, ok: true},
+		{in: "create OPS-1 hello world", name: "create", args: 2, ok: true},
+		{in: "move OPS-1 todo in_progress", name: "move", args: 3, ok: true},
+		{in: "comment OPS-1 text here", name: "comment", args: 2, ok: true},
+		{in: "move OPS-1 todo", ok: false},
+		{in: "", ok: false},
+	}
+	for _, tc := range cases {
+		cmd, err := parseBoardInteractiveCommand(tc.in)
+		if tc.ok && err != nil {
+			t.Fatalf("input=%q unexpected err=%v", tc.in, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("input=%q expected error", tc.in)
+		}
+		if tc.ok {
+			if cmd.name != tc.name {
+				t.Fatalf("input=%q name=%q want=%q", tc.in, cmd.name, tc.name)
+			}
+			if len(cmd.args) != tc.args {
+				t.Fatalf("input=%q args=%d want=%d", tc.in, len(cmd.args), tc.args)
+			}
+		}
+	}
+}
+
 func TestFilterAuditEventsByTimeAndUser(t *testing.T) {
 	in := []audit.Event{
 		{Time: "2026-02-12T10:00:00Z", Type: "team.onboard", Actor: "u1", Status: "ok"},
