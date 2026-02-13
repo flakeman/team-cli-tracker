@@ -84,6 +84,33 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 2. Interactive `view mine` behavior is deterministic and explicit when assignee is omitted.
 3. Regression tests cover env-fallback and explicit-assignee scenarios.
 
+### TD-011 Master API parity completion for issue mutation flow
+- Status: Open
+- Impact: API control-plane is mostly unified, but issue mutation surface is still partially fragmented between `/issue/*` and `/raft/*` semantics.
+- Current state: `/api/v1/*` namespace is available for existing handlers, including issue create/comment and attachment flows; transition/governance mutation paths still require clearer endpoint-level parity and contract consolidation.
+- Exit criteria:
+1. Stable `api/v1` endpoints cover all core issue mutations with explicit contracts (including transition path).
+2. API contract tests validate parity with CLI behavior and authz outcomes.
+3. Legacy path compatibility remains documented until deprecation window is defined.
+
+### TD-012 Attachment integrity model gap for URL-only mode
+- Status: Open
+- Impact: URL-mode attachments (`issue/attachment/add`) cannot provide binary integrity guarantees because file bytes are external to platform storage.
+- Current state: file-mode attachments enforce `sha256` on complete and support verify/verify-all; URL-only mode remains metadata-only.
+- Exit criteria:
+1. URL-only mode is either restricted by policy or explicitly marked non-verified in API/UI.
+2. Security/audit events distinguish verified file attachments vs URL references.
+3. Documentation defines risk model and recommended production mode.
+
+### TD-013 Periodic integrity verification execution policy
+- Status: Open
+- Impact: running periodic attachment verification independently on each node can create duplicate scans and noisy audit trails at scale.
+- Current state: `--attachment-verify-interval` starts local periodic verify loop on any node where enabled.
+- Exit criteria:
+1. Leader-only or single-runner scheduling policy exists for periodic verify.
+2. Metrics clearly separate scheduler node from passive nodes.
+3. Smoke evidence confirms no duplicate scan storms in 3-node operation.
+
 ## P2
 
 ### TD-007 AuthN/AuthZ evolution for user domain
@@ -103,6 +130,24 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 1. Partition/rejoin chaos suite with deterministic assertions.
 2. Long-running sync soak test.
 3. Governance reconfiguration stress tests with no divergence.
+
+### TD-014 Task lifecycle finalization (archive/delete policy)
+- Status: Open
+- Impact: operators currently lack first-class archive/delete commands and retention semantics for issue lifecycle closure.
+- Current state: done-state + comment marker is used operationally; no canonical archive/unarchive API/CLI command set.
+- Exit criteria:
+1. Archive/unarchive behavior is implemented and documented.
+2. Visibility/filtering rules for archived tasks are deterministic across board modes.
+3. Retention/delete policy is explicitly defined (soft/hard delete boundaries).
+
+### TD-015 Technical debt register synchronization discipline
+- Status: Open
+- Impact: register can drift from implemented functionality, reducing planning accuracy.
+- Current state: major SDD-12 delivery landed before debt registry update.
+- Exit criteria:
+1. Debt register update is required in PR template for architecture-affecting changes.
+2. Each new SDD milestone maps to debt delta (opened/closed/updated items).
+3. Quarterly debt review checklist is present in docs/process.
 
 ## Repayment Plan (Suggested Sequence)
 1. TD-001, TD-002, TD-003 (P0 baseline for secure production).
