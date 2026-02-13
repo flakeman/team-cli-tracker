@@ -183,6 +183,7 @@ func runBoard(args []string) {
 	countsOnly := fs.Bool("counts-only", false, "print only column counts (plain mode)")
 	interactive := fs.Bool("interactive", false, "interactive board session with embedded commands (plain mode)")
 	interactiveRefresh := fs.Duration("interactive-refresh", mustDuration(envOr("BOARD_INTERACTIVE_REFRESH", "0s"), 0), "interactive auto-refresh interval; 0 disables periodic redraw")
+	interactivePolicyURL := fs.String("interactive-policy-url", envOr("BOARD_INTERACTIVE_POLICY_URL", envOr("POLICY_URL", "")), "policy endpoint base URL for interactive move validation")
 	once := fs.Bool("once", false, "print once and exit (plain mode defaults to live updates)")
 	refresh := fs.Duration("refresh", mustDuration(envOr("BOARD_REFRESH", "2s"), 2*time.Second), "live board refresh interval")
 	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs for board sync")
@@ -298,6 +299,7 @@ func runBoard(args []string) {
 			projectID: *projectID,
 			nodeID:    *nodeID,
 			dataDir:   *dataDir,
+			policyURL: strings.TrimSpace(*interactivePolicyURL),
 			log:       log,
 			syncOnce:  syncOnce,
 			refresh:   *refresh,
@@ -334,6 +336,7 @@ type boardInteractiveInput struct {
 	projectID string
 	nodeID    string
 	dataDir   string
+	policyURL string
 	log       *store.EventLog
 	syncOnce  func()
 	refresh   time.Duration
@@ -439,6 +442,9 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 		}
 		return false, "created " + cmd.args[0]
 	case "move":
+		if err := validateTransitionProtected(in.policyURL, in.projectID, cmd.args[0], cmd.args[1], cmd.args[2]); err != nil {
+			return false, err.Error()
+		}
 		if err := validateWorkflowTransition(cmd.args[1], cmd.args[2]); err != nil {
 			return false, err.Error()
 		}
@@ -3271,7 +3277,7 @@ func printUsage() {
 	fmt.Println("  node issue create --project-id OPS --issue-id OPS-1 --summary \"...\" [--priority high] [--assignee user]")
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
-	fmt.Println("  node board --project-id OPS [--format plain|json] [--view all|mine] [--assignee-id u1] [--counts-only] [--once] [--refresh 2s] [--peers http://127.0.0.1:4102]")
+	fmt.Println("  node board --project-id OPS [--format plain|json] [--view all|mine] [--assignee-id u1] [--counts-only] [--interactive] [--interactive-policy-url http://127.0.0.1:4101] [--once] [--refresh 2s] [--peers http://127.0.0.1:4102]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
 	fmt.Println("  node storage enable-encryption [--data-dir ./data]")
 	fmt.Println("  node storage rotate-key [--data-dir ./data] [--enforce-due] [--max-age 720h]")

@@ -79,7 +79,8 @@ go run ./cmd/node board --project-id OPS --counts-only
 
 # интерактивная сессия доски (команды внутри: help/create/move/comment/view/counts/table/pause/resume/quit)
 # автообновление можно выключить: --interactive-refresh 0s
-go run ./cmd/node board --project-id OPS --interactive --interactive-refresh 0s
+# защищённая валидация move: --interactive-policy-url http://127.0.0.1:4101
+go run ./cmd/node board --project-id OPS --interactive --interactive-refresh 0s --interactive-policy-url http://127.0.0.1:4101
 
 # вывести машиночитаемый JSON
 go run ./cmd/node board --project-id OPS -format json
@@ -143,6 +144,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD подсчётов board и cadence interactive: `docs/SDD-09-board-counting-and-interactive-cadence.md`
 - План SDD-09: `docs/SDD-09-board-counting-and-interactive-cadence.plan.md`
 - Задачи SDD-09: `docs/SDD-09-board-counting-and-interactive-cadence.tasks.md`
+- SDD parity interactive с protected policy flow: `docs/SDD-10-interactive-protected-policy-parity.md`
+- План SDD-10: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
+- Задачи SDD-10: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
@@ -244,7 +248,8 @@ go run ./cmd/node board --project-id OPS --counts-only
 
 # interactive board session (in-session commands: help/create/move/comment/view/counts/table/pause/resume/quit)
 # auto-refresh can be disabled: --interactive-refresh 0s
-go run ./cmd/node board --project-id OPS --interactive --interactive-refresh 0s
+# protected move validation: --interactive-policy-url http://127.0.0.1:4101
+go run ./cmd/node board --project-id OPS --interactive --interactive-refresh 0s --interactive-policy-url http://127.0.0.1:4101
 
 # machine-readable output
 go run ./cmd/node board --project-id OPS -format json
@@ -308,6 +313,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - Board counting and interactive cadence SDD: `docs/SDD-09-board-counting-and-interactive-cadence.md`
 - SDD-09 plan: `docs/SDD-09-board-counting-and-interactive-cadence.plan.md`
 - SDD-09 tasks: `docs/SDD-09-board-counting-and-interactive-cadence.tasks.md`
+- Interactive protected-policy parity SDD: `docs/SDD-10-interactive-protected-policy-parity.md`
+- SDD-10 plan: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
+- SDD-10 tasks: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
 - Interactive board smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Board live smoke (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`

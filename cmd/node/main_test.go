@@ -444,6 +444,71 @@ func TestResolvedAssigneeForScope(t *testing.T) {
 	}
 }
 
+func TestInteractiveMovePolicyDenyDoesNotAppend(t *testing.T) {
+	dataDir := t.TempDir()
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+	}))
+	defer srv.Close()
+
+	in := boardInteractiveInput{
+		projectID: "OPS",
+		nodeID:    "node-1",
+		dataDir:   dataDir,
+		policyURL: srv.URL,
+		state:     &boardRenderState{},
+	}
+	before, _ := logDB.ReadAll()
+	quit, msg := applyBoardInteractiveCommand("move OPS-P1 todo in_progress", in)
+	after, _ := logDB.ReadAll()
+	if quit {
+		t.Fatalf("unexpected quit on deny")
+	}
+	if !strings.Contains(strings.ToLower(msg), "policy") && !strings.Contains(strings.ToLower(msg), "forbidden") && !strings.Contains(strings.ToLower(msg), "status") {
+		t.Fatalf("unexpected deny message: %s", msg)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("event appended on denied policy: before=%d after=%d", len(before), len(after))
+	}
+}
+
+func TestInteractiveMovePolicyAllowAppends(t *testing.T) {
+	dataDir := t.TempDir()
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"allow": true})
+	}))
+	defer srv.Close()
+
+	in := boardInteractiveInput{
+		projectID: "OPS",
+		nodeID:    "node-1",
+		dataDir:   dataDir,
+		policyURL: srv.URL,
+		state:     &boardRenderState{},
+	}
+	before, _ := logDB.ReadAll()
+	quit, msg := applyBoardInteractiveCommand("move OPS-P2 todo in_progress", in)
+	after, _ := logDB.ReadAll()
+	if quit {
+		t.Fatalf("unexpected quit on allow")
+	}
+	if !strings.Contains(msg, "moved OPS-P2") {
+		t.Fatalf("unexpected allow message: %s", msg)
+	}
+	if len(after) != len(before)+1 {
+		t.Fatalf("expected appended transition event: before=%d after=%d", len(before), len(after))
+	}
+}
+
 func TestParseBoardInteractiveCommand(t *testing.T) {
 	cases := []struct {
 		in   string
