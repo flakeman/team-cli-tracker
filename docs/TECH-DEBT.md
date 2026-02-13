@@ -66,6 +66,24 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 2. Correlated audit/event/sync diagnostics for incident timelines.
 3. Runbook links to alert IDs and response procedures.
 
+### TD-009 Interactive command path parity with protected policy flow
+- Status: Open
+- Impact: interactive `board` commands (`create/move/comment`) currently append events directly in local store and may diverge from stricter protected API/policy paths used in secured deployments.
+- Current state: `applyBoardInteractiveCommand` writes via `appendIssueEvent` directly; transition command validates workflow but does not enforce remote policy/quorum path by default.
+- Exit criteria:
+1. Interactive command execution supports policy-aware mode equivalent to production-protected transition path.
+2. Clear mode contract in CLI/help/docs: local-append vs protected API execution.
+3. Tests cover rejection/acceptance behavior parity for interactive vs non-interactive command flows.
+
+### TD-010 Interactive mine-view identity resolution consistency
+- Status: Open
+- Impact: in `--view mine`, filtering may use fallback env identity while rendered scope label can stay ambiguous, which can mislead operators about what subset is shown.
+- Current state: render path may resolve target assignee from env (`USER_ID`/`USER`) without persisting resolved value in displayed scope metadata.
+- Exit criteria:
+1. Scope label always shows effective assignee used for filtering.
+2. Interactive `view mine` behavior is deterministic and explicit when assignee is omitted.
+3. Regression tests cover env-fallback and explicit-assignee scenarios.
+
 ## P2
 
 ### TD-007 AuthN/AuthZ evolution for user domain
