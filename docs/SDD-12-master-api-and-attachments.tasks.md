@@ -9,5 +9,5 @@
 - [x] Реализовать storage adapter для бинарных файлов (MVP local + S3-compatible backend).
 - [x] Реализовать presigned upload/download lifecycle (MVP signed tokens).
 - [x] Добавить checksum validation (`sha256`) в attachment complete flow.
-- [ ] Добавить webhook события для вложений.
-- [ ] Добавить e2e smoke: 3 VPS + attachments + audit evidence.
+- [x] Добавить webhook события для вложений.
+- [x] Добавить e2e smoke: 3 VPS + attachments + audit evidence.

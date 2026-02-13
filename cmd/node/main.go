@@ -1281,6 +1281,10 @@ func runServe(args []string) {
 		attachmentBackend:    backend,
 		attachmentS3Client:   s3Client,
 		attachmentS3Bucket:   s3Bucket,
+		webhooks:             map[string]webhookSubscription{},
+	}
+	if err := s.loadWebhooks(); err != nil {
+		fatal(err)
 	}
 
 	mux := http.NewServeMux()
@@ -1311,6 +1315,10 @@ func runServe(args []string) {
 	register("/issue/attachment/verify-all", s.withAuthRoles(s.issueAttachmentVerifyAll, "admin", "lead"))
 	register("/attachments/upload", s.attachmentsUpload)
 	register("/attachments/download", s.attachmentsDownload)
+	register("/webhooks/create", s.withAuthRoles(s.webhookCreate, "admin", "lead"))
+	register("/webhooks/list", s.withAuthRoles(s.webhookList, "admin", "lead"))
+	register("/webhooks/revoke", s.withAuthRoles(s.webhookRevoke, "admin", "lead"))
+	register("/webhooks/test", s.withAuthRoles(s.webhookTest, "admin", "lead"))
 	register("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	register("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	register("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
@@ -1412,6 +1420,16 @@ type syncServer struct {
 	attachmentVerifyMismatch atomic.Uint64
 	attachmentVerifyErrors   atomic.Uint64
 	attachmentVerifySchedulerActive bool
+	webhookMu sync.Mutex
+	webhooks  map[string]webhookSubscription
+}
+
+type webhookSubscription struct {
+	ID        string   `json:"id"`
+	URL       string   `json:"url"`
+	Events    []string `json:"events"`
+	Active    bool     `json:"active"`
+	CreatedAt string   `json:"created_at"`
 }
 
 type peerSyncState struct {
@@ -1450,6 +1468,20 @@ type issueTransitionRequest struct {
 type issueArchiveRequest struct {
 	ProjectID string `json:"project_id"`
 	IssueID   string `json:"issue_id"`
+}
+
+type webhookCreateRequest struct {
+	URL    string   `json:"url"`
+	Events []string `json:"events"`
+}
+
+type webhookRevokeRequest struct {
+	ID string `json:"id"`
+}
+
+type webhookTestRequest struct {
+	ID    string `json:"id"`
+	Event string `json:"event"`
 }
 
 type issueAttachmentAddRequest struct {
@@ -3153,6 +3185,16 @@ func (s *syncServer) issueAttachmentComplete(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.emitWebhookEvent("issue.attachment.added", map[string]any{
+		"project_id":     in.ProjectID,
+		"issue_id":       in.IssueID,
+		"attachment_id":  in.AttachmentID,
+		"storage_key":    storageKey,
+		"filename":       in.Filename,
+		"content_type":   in.ContentType,
+		"size_bytes":     in.SizeBytes,
+		"checksum_sha256": in.ChecksumSHA256,
+	}, "")
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "completed", "attachment_id": in.AttachmentID})
 }
 
@@ -3189,6 +3231,13 @@ func (s *syncServer) issueAttachmentAdd(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.emitWebhookEvent("issue.attachment.added", map[string]any{
+		"project_id":    in.ProjectID,
+		"issue_id":      in.IssueID,
+		"attachment_id": attachmentID,
+		"url":           in.URL,
+		"title":         in.Title,
+	}, "")
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "added", "attachment_id": attachmentID})
 }
 
@@ -3218,6 +3267,11 @@ func (s *syncServer) issueAttachmentRemove(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	s.emitWebhookEvent("issue.attachment.removed", map[string]any{
+		"project_id":    in.ProjectID,
+		"issue_id":      in.IssueID,
+		"attachment_id": in.AttachmentID,
+	}, "")
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "removed"})
 }
 
@@ -3426,6 +3480,114 @@ func (s *syncServer) issueAttachmentVerifyAll(w http.ResponseWriter, r *http.Req
 		"backend":    s.attachmentBackend,
 		"results":    results,
 	})
+}
+
+func (s *syncServer) webhookCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in webhookCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.URL = strings.TrimSpace(in.URL)
+	if in.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url is required"})
+		return
+	}
+	if len(in.Events) == 0 {
+		in.Events = []string{"issue.attachment.added", "issue.attachment.removed"}
+	}
+	id := fmt.Sprintf("wh-%d", time.Now().UTC().UnixNano())
+	sub := webhookSubscription{
+		ID:        id,
+		URL:       in.URL,
+		Events:    normalizeWebhookEvents(in.Events),
+		Active:    true,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	s.webhookMu.Lock()
+	s.webhooks[id] = sub
+	err := s.saveWebhooksLocked()
+	s.webhookMu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, sub)
+}
+
+func (s *syncServer) webhookList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	s.webhookMu.Lock()
+	items := make([]webhookSubscription, 0, len(s.webhooks))
+	for _, it := range s.webhooks {
+		items = append(items, it)
+	}
+	s.webhookMu.Unlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	writeJSON(w, http.StatusOK, map[string]any{"webhooks": items})
+}
+
+func (s *syncServer) webhookRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in webhookRevokeRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	id := strings.TrimSpace(in.ID)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+	s.webhookMu.Lock()
+	sub, ok := s.webhooks[id]
+	if !ok {
+		s.webhookMu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "webhook not found"})
+		return
+	}
+	sub.Active = false
+	s.webhooks[id] = sub
+	err := s.saveWebhooksLocked()
+	s.webhookMu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "id": id})
+}
+
+func (s *syncServer) webhookTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in webhookTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	id := strings.TrimSpace(in.ID)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+	ev := strings.TrimSpace(in.Event)
+	if ev == "" {
+		ev = "webhook.test"
+	}
+	s.emitWebhookEvent(ev, map[string]any{"id": id, "time": time.Now().UTC().Format(time.RFC3339)}, id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent", "id": id, "event": ev})
 }
 
 func (s *syncServer) attachmentsUpload(w http.ResponseWriter, r *http.Request) {
@@ -4720,6 +4882,124 @@ func requestBaseURL(r *http.Request) string {
 		host = "127.0.0.1"
 	}
 	return scheme + "://" + host
+}
+
+func normalizeWebhookEvents(events []string) []string {
+	out := make([]string, 0, len(events))
+	seen := map[string]struct{}{}
+	for _, e := range events {
+		e = strings.TrimSpace(strings.ToLower(e))
+		if e == "" {
+			continue
+		}
+		if _, ok := seen[e]; ok {
+			continue
+		}
+		seen[e] = struct{}{}
+		out = append(out, e)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *syncServer) webhookFilePath() string {
+	return filepath.Join(s.dataDir, "webhooks.json")
+}
+
+func (s *syncServer) loadWebhooks() error {
+	s.webhookMu.Lock()
+	defer s.webhookMu.Unlock()
+	path := s.webhookFilePath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.webhooks = map[string]webhookSubscription{}
+			return nil
+		}
+		return err
+	}
+	var doc struct {
+		Webhooks []webhookSubscription `json:"webhooks"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	s.webhooks = map[string]webhookSubscription{}
+	for _, it := range doc.Webhooks {
+		it.ID = strings.TrimSpace(it.ID)
+		it.URL = strings.TrimSpace(it.URL)
+		it.Events = normalizeWebhookEvents(it.Events)
+		if it.ID == "" || it.URL == "" {
+			continue
+		}
+		s.webhooks[it.ID] = it
+	}
+	return nil
+}
+
+func (s *syncServer) saveWebhooksLocked() error {
+	doc := struct {
+		Webhooks []webhookSubscription `json:"webhooks"`
+	}{Webhooks: make([]webhookSubscription, 0, len(s.webhooks))}
+	for _, it := range s.webhooks {
+		doc.Webhooks = append(doc.Webhooks, it)
+	}
+	sort.Slice(doc.Webhooks, func(i, j int) bool { return doc.Webhooks[i].ID < doc.Webhooks[j].ID })
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.webhookFilePath(), raw, 0o600)
+}
+
+func (s *syncServer) emitWebhookEvent(eventType string, payload map[string]any, targetID string) {
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	if eventType == "" {
+		return
+	}
+	s.webhookMu.Lock()
+	targets := make([]webhookSubscription, 0, len(s.webhooks))
+	for _, sub := range s.webhooks {
+		if !sub.Active {
+			continue
+		}
+		if strings.TrimSpace(targetID) != "" && sub.ID != strings.TrimSpace(targetID) {
+			continue
+		}
+		for _, e := range sub.Events {
+			if e == eventType || e == "*" {
+				targets = append(targets, sub)
+				break
+			}
+		}
+	}
+	s.webhookMu.Unlock()
+	if len(targets) == 0 {
+		return
+	}
+	body := map[string]any{
+		"event":      eventType,
+		"project_id": s.projectID,
+		"time":       time.Now().UTC().Format(time.RFC3339),
+		"payload":    payload,
+	}
+	raw, _ := json.Marshal(body)
+	for _, sub := range targets {
+		go func(sub webhookSubscription, raw []byte) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, sub.URL, bytes.NewReader(raw))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
+			}
+			_ = res.Body.Close()
+		}(sub, raw)
+	}
 }
 
 func attachmentStorageKey(projectID, issueID, attachmentID string) string {

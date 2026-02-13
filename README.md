@@ -178,6 +178,12 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 curl -H "Authorization: Bearer <token>" \
   "http://127.0.0.1:4101/api/v1/issue/attachment/verify-all?project_id=OPS"
 
+# webhooks: create/list/test/revoke
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"url":"http://127.0.0.1:8088/hook","events":["issue.attachment.added","issue.attachment.removed"]}' \
+  "http://127.0.0.1:4101/api/v1/webhooks/create"
+curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/list"
+
 # Attachment backend selection on server:
 # local (default): --attachment-backend local
 # s3/minio:
@@ -224,6 +230,7 @@ curl -H "Authorization: Bearer <token>" \
 - SDD Master API + file attachments: `docs/SDD-12-master-api-and-attachments.md`
 - План SDD-12: `docs/SDD-12-master-api-and-attachments.plan.md`
 - Задачи SDD-12: `docs/SDD-12-master-api-and-attachments.tasks.md`
+- Smoke attachments + webhooks (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-ATTACHMENTS-3VPS-2026-02-13.md`
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
