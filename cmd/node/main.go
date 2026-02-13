@@ -379,7 +379,7 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 	}
 	switch cmd.name {
 	case "help":
-		return false, "commands: create <id> <summary> | move <id> <from> <to> | comment <id> <text> | view all|mine [assignee] | counts | table | quit"
+		return false, interactiveHelpText()
 	case "quit":
 		return true, "bye"
 	case "counts":
@@ -436,6 +436,25 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 	default:
 		return false, "unsupported command"
 	}
+}
+
+func interactiveHelpText() string {
+	return strings.Join([]string{
+		"Interactive commands:",
+		"  help                          - show this help",
+		"  create <ISSUE_ID> <summary>   - create issue in To Do",
+		"    example: create OPS-901 Fix auth timeout",
+		"  move <ISSUE_ID> <from> <to>   - move issue across workflow",
+		"    example: move OPS-901 todo in_progress",
+		"  comment <ISSUE_ID> <text>     - add comment to issue",
+		"    example: comment OPS-901 check logs on node-2",
+		"  view all                      - show all issues",
+		"  view mine [assignee]          - show only assignee issues",
+		"    example: view mine vova",
+		"  counts                        - switch to counts-only summary",
+		"  table                         - switch back to table view",
+		"  quit                          - exit interactive mode",
+	}, "\n")
 }
 
 func parseBoardInteractiveCommand(raw string) (boardInteractiveCommand, error) {

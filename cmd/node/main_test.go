@@ -443,6 +443,22 @@ func TestParseBoardInteractiveCommand(t *testing.T) {
 	}
 }
 
+func TestInteractiveHelpTextHasExamples(t *testing.T) {
+	help := interactiveHelpText()
+	required := []string{
+		"create <ISSUE_ID> <summary>",
+		"move <ISSUE_ID> <from> <to>",
+		"comment <ISSUE_ID> <text>",
+		"view mine [assignee]",
+		"example: create OPS-901 Fix auth timeout",
+	}
+	for _, token := range required {
+		if !strings.Contains(help, token) {
+			t.Fatalf("help missing token %q", token)
+		}
+	}
+}
+
 func TestFilterAuditEventsByTimeAndUser(t *testing.T) {
 	in := []audit.Event{
 		{Time: "2026-02-12T10:00:00Z", Type: "team.onboard", Actor: "u1", Status: "ok"},
