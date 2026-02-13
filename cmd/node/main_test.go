@@ -284,7 +284,7 @@ func TestPrintBoardPlainTableFormat(t *testing.T) {
 		t.Fatalf("pipe: %v", err)
 	}
 	os.Stdout = w
-	printBoardPlain("OPS", board, 7)
+	printBoardPlain("OPS", board, board, 7, "all", "")
 	_ = w.Close()
 	os.Stdout = oldStdout
 	raw, _ := io.ReadAll(r)
@@ -295,7 +295,13 @@ func TestPrintBoardPlainTableFormat(t *testing.T) {
 	if !strings.Contains(out, "Assignee WIP limit: 3") {
 		t.Fatalf("missing wip header: %s", out)
 	}
-	if !strings.Contains(out, "Total issues: 3  Open: 2  Done: 1") {
+	if !strings.Contains(out, "Scope: all") {
+		t.Fatalf("missing scope header: %s", out)
+	}
+	if !strings.Contains(out, "Displayed issues: 3  Open: 2  Done: 1") {
+		t.Fatalf("missing displayed header: %s", out)
+	}
+	if !strings.Contains(out, "All issues: 3  Open: 2  Done: 1") {
 		t.Fatalf("missing totals header: %s", out)
 	}
 	if !strings.Contains(out, "To Do [1/20]") || !strings.Contains(out, "In Progress [1/8]") || !strings.Contains(out, "Done [1/inf]") {
@@ -313,11 +319,11 @@ func TestRenderBoardPlainEmptyBoard(t *testing.T) {
 	board := map[string][]issueProjection{
 		"todo": {}, "in_progress": {}, "code_review": {}, "testing": {}, "done": {},
 	}
-	out := renderBoardPlain("OPS", board, 0)
+	out := renderBoardPlain("OPS", board, board, 0, "all", "")
 	if !strings.Contains(out, "Project: OPS  Revision: 0") {
 		t.Fatalf("missing empty revision header: %s", out)
 	}
-	if !strings.Contains(out, "Total issues: 0  Open: 0  Done: 0") {
+	if !strings.Contains(out, "Displayed issues: 0  Open: 0  Done: 0") {
 		t.Fatalf("missing empty totals header: %s", out)
 	}
 	if strings.Count(out, "|                                  |                                  |                                  |                                  |                                  |") < 1 {
@@ -330,7 +336,7 @@ func TestRenderBoardPlainLongCardTruncates(t *testing.T) {
 		"todo":        {{ID: "OPS-100500", Summary: strings.Repeat("very-long-summary-", 6), Assignee: "verylongassigneeid"}},
 		"in_progress": {}, "code_review": {}, "testing": {}, "done": {},
 	}
-	out := renderBoardPlain("OPS", board, 10)
+	out := renderBoardPlain("OPS", board, board, 10, "all", "")
 	if !strings.Contains(out, "...") {
 		t.Fatalf("expected truncation marker: %s", out)
 	}
@@ -347,8 +353,8 @@ func TestRenderBoardPlainDeterministicAcrossCalls(t *testing.T) {
 		"testing":     {{ID: "OPS-4", Summary: "d", Assignee: "u4"}},
 		"done":        {},
 	}
-	out1 := renderBoardPlain("OPS", board, 11)
-	out2 := renderBoardPlain("OPS", board, 11)
+	out1 := renderBoardPlain("OPS", board, board, 11, "all", "")
+	out2 := renderBoardPlain("OPS", board, board, 11, "all", "")
 	if out1 != out2 {
 		t.Fatalf("non-deterministic board render")
 	}
@@ -391,7 +397,7 @@ func TestPrintBoardCounts(t *testing.T) {
 		t.Fatalf("pipe: %v", err)
 	}
 	os.Stdout = w
-	printBoardCounts("OPS", board, 9)
+	printBoardCounts("OPS", board, board, 9, "all", "")
 	_ = w.Close()
 	os.Stdout = oldStdout
 	raw, _ := io.ReadAll(r)
@@ -399,11 +405,27 @@ func TestPrintBoardCounts(t *testing.T) {
 	if !strings.Contains(out, "Project: OPS  Revision: 9") {
 		t.Fatalf("missing revision: %s", out)
 	}
-	if !strings.Contains(out, "Total issues: 3  Open: 2  Done: 1") {
+	if !strings.Contains(out, "Displayed issues: 3  Open: 2  Done: 1") {
 		t.Fatalf("missing totals: %s", out)
+	}
+	if !strings.Contains(out, "All issues: 3  Open: 2  Done: 1") {
+		t.Fatalf("missing all totals: %s", out)
 	}
 	if !strings.Contains(out, "To Do=1 In Progress=1 Code Review=0 Testing=0 Done=1") {
 		t.Fatalf("missing column counts: %s", out)
+	}
+}
+
+func TestTickerChanPaused(t *testing.T) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	state := &boardRenderState{interactivePaused: true}
+	if ch := tickerChan(ticker, state); ch != nil {
+		t.Fatalf("expected nil ticker channel when paused")
+	}
+	state.interactivePaused = false
+	if ch := tickerChan(ticker, state); ch == nil {
+		t.Fatalf("expected ticker channel when resumed")
 	}
 }
 

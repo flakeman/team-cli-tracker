@@ -182,6 +182,7 @@ func runBoard(args []string) {
 	assigneeID := fs.String("assignee-id", envOr("BOARD_ASSIGNEE_ID", ""), "assignee id for mine view")
 	countsOnly := fs.Bool("counts-only", false, "print only column counts (plain mode)")
 	interactive := fs.Bool("interactive", false, "interactive board session with embedded commands (plain mode)")
+	interactiveRefresh := fs.Duration("interactive-refresh", mustDuration(envOr("BOARD_INTERACTIVE_REFRESH", "0s"), 0), "interactive auto-refresh interval; 0 disables periodic redraw")
 	once := fs.Bool("once", false, "print once and exit (plain mode defaults to live updates)")
 	refresh := fs.Duration("refresh", mustDuration(envOr("BOARD_REFRESH", "2s"), 2*time.Second), "live board refresh interval")
 	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs for board sync")
@@ -222,16 +223,19 @@ func runBoard(args []string) {
 		}
 	}
 	state := boardRenderState{
-		viewMode:   strings.ToLower(strings.TrimSpace(*view)),
-		assigneeID: strings.TrimSpace(*assigneeID),
-		countsOnly: *countsOnly,
+		viewMode:            strings.ToLower(strings.TrimSpace(*view)),
+		assigneeID:          strings.TrimSpace(*assigneeID),
+		countsOnly:          *countsOnly,
+		interactivePaused:   false,
+		interactiveInterval: *interactiveRefresh,
 	}
 	render := func(status string) error {
 		all, err := log.ReadAll()
 		if err != nil {
 			return err
 		}
-		board := projectBoardFromEvents(*projectID, all)
+		boardAll := projectBoardFromEvents(*projectID, all)
+		board := boardAll
 		mode := strings.ToLower(strings.TrimSpace(state.viewMode))
 		switch mode {
 		case "all", "":
@@ -253,9 +257,9 @@ func runBoard(args []string) {
 			fmt.Println(string(raw))
 		default:
 			if state.countsOnly {
-				printBoardCounts(*projectID, board, len(all))
+				printBoardCounts(*projectID, board, boardAll, len(all), mode, state.assigneeID)
 			} else {
-				printBoardPlain(*projectID, board, len(all))
+				printBoardPlain(*projectID, board, boardAll, len(all), mode, state.assigneeID)
 			}
 			if strings.TrimSpace(status) != "" {
 				fmt.Printf("Status: %s\n", strings.TrimSpace(status))
@@ -278,7 +282,9 @@ func runBoard(args []string) {
 		*refresh = 2 * time.Second
 	}
 	if *interactive {
-		*refresh = maxDuration(*refresh, 2*time.Second)
+		if state.interactiveInterval < 0 {
+			state.interactiveInterval = 0
+		}
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -313,9 +319,11 @@ func runBoard(args []string) {
 }
 
 type boardRenderState struct {
-	viewMode   string
-	assigneeID string
-	countsOnly bool
+	viewMode            string
+	assigneeID          string
+	countsOnly          bool
+	interactivePaused   bool
+	interactiveInterval time.Duration
 }
 
 type boardInteractiveInput struct {
@@ -345,8 +353,11 @@ func runBoardInteractiveLoop(in boardInteractiveInput) {
 		close(cmdCh)
 	}()
 	status := "interactive mode: help | create | move | comment | view | counts | quit"
-	t := time.NewTicker(in.refresh)
-	defer t.Stop()
+	var t *time.Ticker
+	if in.state.interactiveInterval > 0 {
+		t = time.NewTicker(in.state.interactiveInterval)
+		defer t.Stop()
+	}
 	for {
 		in.syncOnce()
 		fmt.Print("\033[H\033[2J")
@@ -357,7 +368,7 @@ func runBoardInteractiveLoop(in boardInteractiveInput) {
 		select {
 		case <-in.stop:
 			return
-		case <-t.C:
+		case <-tickerChan(t, in.state):
 			continue
 		case raw, ok := <-cmdCh:
 			if !ok {
@@ -388,6 +399,12 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 	case "table":
 		in.state.countsOnly = false
 		return false, "table view enabled"
+	case "pause":
+		in.state.interactivePaused = true
+		return false, "auto-refresh paused"
+	case "resume":
+		in.state.interactivePaused = false
+		return false, "auto-refresh resumed"
 	case "view":
 		mode := strings.ToLower(strings.TrimSpace(cmd.args[0]))
 		switch mode {
@@ -453,6 +470,8 @@ func interactiveHelpText() string {
 		"    example: view mine vova",
 		"  counts                        - switch to counts-only summary",
 		"  table                         - switch back to table view",
+		"  pause                         - pause periodic redraw",
+		"  resume                        - resume periodic redraw",
 		"  quit                          - exit interactive mode",
 	}, "\n")
 }
@@ -465,7 +484,7 @@ func parseBoardInteractiveCommand(raw string) (boardInteractiveCommand, error) {
 	parts := strings.Fields(line)
 	name := strings.ToLower(parts[0])
 	switch name {
-	case "help", "quit", "counts", "table":
+	case "help", "quit", "counts", "table", "pause", "resume":
 		return boardInteractiveCommand{name: name}, nil
 	case "view":
 		if len(parts) < 2 {
@@ -3075,26 +3094,41 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 	return out
 }
 
-func printBoardPlain(projectID string, board map[string][]issueProjection, revision int) {
-	fmt.Print(renderBoardPlain(projectID, board, revision))
+func printBoardPlain(projectID string, board, boardAll map[string][]issueProjection, revision int, viewMode, assigneeID string) {
+	fmt.Print(renderBoardPlain(projectID, board, boardAll, revision, viewMode, assigneeID))
 }
 
-func printBoardCounts(projectID string, board map[string][]issueProjection, revision int) {
+func printBoardCounts(projectID string, board, boardAll map[string][]issueProjection, revision int, viewMode, assigneeID string) {
 	const assigneeWIPLimit = 3
 	totalIssues := 0
+	allTotal := 0
 	doneIssues := len(board["done"])
+	allDone := len(boardAll["done"])
 	for _, items := range board {
 		totalIssues += len(items)
 	}
+	for _, items := range boardAll {
+		allTotal += len(items)
+	}
 	openIssues := totalIssues - doneIssues
+	allOpen := allTotal - allDone
+	scope := "all"
+	if viewMode == "mine" {
+		scope = "mine"
+		if strings.TrimSpace(assigneeID) != "" {
+			scope += "(" + strings.TrimSpace(assigneeID) + ")"
+		}
+	}
 	fmt.Printf("Project: %s  Revision: %d\n", projectID, revision)
 	fmt.Printf("Assignee WIP limit: %d\n", assigneeWIPLimit)
-	fmt.Printf("Total issues: %d  Open: %d  Done: %d\n", totalIssues, openIssues, doneIssues)
+	fmt.Printf("Scope: %s\n", scope)
+	fmt.Printf("Displayed issues: %d  Open: %d  Done: %d\n", totalIssues, openIssues, doneIssues)
+	fmt.Printf("All issues: %d  Open: %d  Done: %d\n", allTotal, allOpen, allDone)
 	fmt.Printf("To Do=%d In Progress=%d Code Review=%d Testing=%d Done=%d\n",
 		len(board["todo"]), len(board["in_progress"]), len(board["code_review"]), len(board["testing"]), len(board["done"]))
 }
 
-func renderBoardPlain(projectID string, board map[string][]issueProjection, revision int) string {
+func renderBoardPlain(projectID string, board, boardAll map[string][]issueProjection, revision int, viewMode, assigneeID string) string {
 	const boardCellWidth = 34
 	const assigneeWIPLimit = 3
 	cols := []struct {
@@ -3109,15 +3143,28 @@ func renderBoardPlain(projectID string, board map[string][]issueProjection, revi
 		{Key: "done", Title: "Done", Limit: "inf"},
 	}
 	totalIssues := 0
+	allTotal := 0
 	doneIssues := len(board["done"])
+	allDone := len(boardAll["done"])
 	for _, c := range cols {
 		totalIssues += len(board[c.Key])
+		allTotal += len(boardAll[c.Key])
 	}
 	openIssues := totalIssues - doneIssues
+	allOpen := allTotal - allDone
+	scope := "all"
+	if viewMode == "mine" {
+		scope = "mine"
+		if strings.TrimSpace(assigneeID) != "" {
+			scope += "(" + strings.TrimSpace(assigneeID) + ")"
+		}
+	}
 	var out strings.Builder
 	fmt.Fprintf(&out, "Project: %s  Revision: %d\n", projectID, revision)
 	fmt.Fprintf(&out, "Assignee WIP limit: %d\n", assigneeWIPLimit)
-	fmt.Fprintf(&out, "Total issues: %d  Open: %d  Done: %d\n", totalIssues, openIssues, doneIssues)
+	fmt.Fprintf(&out, "Scope: %s\n", scope)
+	fmt.Fprintf(&out, "Displayed issues: %d  Open: %d  Done: %d\n", totalIssues, openIssues, doneIssues)
+	fmt.Fprintf(&out, "All issues: %d  Open: %d  Done: %d\n", allTotal, allOpen, allDone)
 	sep := "+" + strings.Repeat(strings.Repeat("-", boardCellWidth)+"+", len(cols))
 	out.WriteString(sep + "\n")
 	headerCells := make([]string, 0, len(cols))
@@ -4268,6 +4315,13 @@ func maxDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+func tickerChan(t *time.Ticker, state *boardRenderState) <-chan time.Time {
+	if t == nil || (state != nil && state.interactivePaused) {
+		return nil
+	}
+	return t.C
 }
 
 func normalizePeerURL(raw string) string {

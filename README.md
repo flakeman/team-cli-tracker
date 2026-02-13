@@ -77,8 +77,9 @@ go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
 # быстрая сводка по количеству задач в столбцах
 go run ./cmd/node board --project-id OPS --counts-only
 
-# интерактивная сессия доски (команды внутри: help/create/move/comment/view/counts/quit)
-go run ./cmd/node board --project-id OPS --interactive --refresh 2s
+# интерактивная сессия доски (команды внутри: help/create/move/comment/view/counts/table/pause/resume/quit)
+# автообновление можно выключить: --interactive-refresh 0s
+go run ./cmd/node board --project-id OPS --interactive --interactive-refresh 0s
 
 # вывести машиночитаемый JSON
 go run ./cmd/node board --project-id OPS -format json
@@ -238,8 +239,9 @@ go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
 # counts-only summary
 go run ./cmd/node board --project-id OPS --counts-only
 
-# interactive board session (in-session commands: help/create/move/comment/view/counts/quit)
-go run ./cmd/node board --project-id OPS --interactive --refresh 2s
+# interactive board session (in-session commands: help/create/move/comment/view/counts/table/pause/resume/quit)
+# auto-refresh can be disabled: --interactive-refresh 0s
+go run ./cmd/node board --project-id OPS --interactive --interactive-refresh 0s
 
 # machine-readable output
 go run ./cmd/node board --project-id OPS -format json
