@@ -284,16 +284,19 @@ func TestPrintBoardPlainTableFormat(t *testing.T) {
 		t.Fatalf("pipe: %v", err)
 	}
 	os.Stdout = w
-	printBoardPlain("OPS", board)
+	printBoardPlain("OPS", board, 7)
 	_ = w.Close()
 	os.Stdout = oldStdout
 	raw, _ := io.ReadAll(r)
 	out := string(raw)
-	if !strings.Contains(out, "Project: OPS  Revision: 3") {
+	if !strings.Contains(out, "Project: OPS  Revision: 7") {
 		t.Fatalf("missing project header: %s", out)
 	}
 	if !strings.Contains(out, "Assignee WIP limit: 3") {
 		t.Fatalf("missing wip header: %s", out)
+	}
+	if !strings.Contains(out, "Total issues: 3  Open: 2  Done: 1") {
+		t.Fatalf("missing totals header: %s", out)
 	}
 	if !strings.Contains(out, "To Do [1/20]") || !strings.Contains(out, "In Progress [1/8]") || !strings.Contains(out, "Done [1/inf]") {
 		t.Fatalf("missing column headers: %s", out)
@@ -310,9 +313,12 @@ func TestRenderBoardPlainEmptyBoard(t *testing.T) {
 	board := map[string][]issueProjection{
 		"todo": {}, "in_progress": {}, "code_review": {}, "testing": {}, "done": {},
 	}
-	out := renderBoardPlain("OPS", board)
+	out := renderBoardPlain("OPS", board, 0)
 	if !strings.Contains(out, "Project: OPS  Revision: 0") {
 		t.Fatalf("missing empty revision header: %s", out)
+	}
+	if !strings.Contains(out, "Total issues: 0  Open: 0  Done: 0") {
+		t.Fatalf("missing empty totals header: %s", out)
 	}
 	if strings.Count(out, "|                                  |                                  |                                  |                                  |                                  |") < 1 {
 		t.Fatalf("missing empty table row: %s", out)
@@ -324,7 +330,7 @@ func TestRenderBoardPlainLongCardTruncates(t *testing.T) {
 		"todo":        {{ID: "OPS-100500", Summary: strings.Repeat("very-long-summary-", 6), Assignee: "verylongassigneeid"}},
 		"in_progress": {}, "code_review": {}, "testing": {}, "done": {},
 	}
-	out := renderBoardPlain("OPS", board)
+	out := renderBoardPlain("OPS", board, 10)
 	if !strings.Contains(out, "...") {
 		t.Fatalf("expected truncation marker: %s", out)
 	}
@@ -341,8 +347,8 @@ func TestRenderBoardPlainDeterministicAcrossCalls(t *testing.T) {
 		"testing":     {{ID: "OPS-4", Summary: "d", Assignee: "u4"}},
 		"done":        {},
 	}
-	out1 := renderBoardPlain("OPS", board)
-	out2 := renderBoardPlain("OPS", board)
+	out1 := renderBoardPlain("OPS", board, 11)
+	out2 := renderBoardPlain("OPS", board, 11)
 	if out1 != out2 {
 		t.Fatalf("non-deterministic board render")
 	}

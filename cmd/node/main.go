@@ -223,7 +223,7 @@ func runBoard(args []string) {
 			raw, _ := json.MarshalIndent(board, "", "  ")
 			fmt.Println(string(raw))
 		default:
-			printBoardPlain(*projectID, board)
+			printBoardPlain(*projectID, board, len(all))
 		}
 		return nil
 	}
@@ -2836,11 +2836,11 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 	return out
 }
 
-func printBoardPlain(projectID string, board map[string][]issueProjection) {
-	fmt.Print(renderBoardPlain(projectID, board))
+func printBoardPlain(projectID string, board map[string][]issueProjection, revision int) {
+	fmt.Print(renderBoardPlain(projectID, board, revision))
 }
 
-func renderBoardPlain(projectID string, board map[string][]issueProjection) string {
+func renderBoardPlain(projectID string, board map[string][]issueProjection, revision int) string {
 	const boardCellWidth = 34
 	const assigneeWIPLimit = 3
 	cols := []struct {
@@ -2855,12 +2855,15 @@ func renderBoardPlain(projectID string, board map[string][]issueProjection) stri
 		{Key: "done", Title: "Done", Limit: "inf"},
 	}
 	totalIssues := 0
+	doneIssues := len(board["done"])
 	for _, c := range cols {
 		totalIssues += len(board[c.Key])
 	}
+	openIssues := totalIssues - doneIssues
 	var out strings.Builder
-	fmt.Fprintf(&out, "Project: %s  Revision: %d\n", projectID, totalIssues)
+	fmt.Fprintf(&out, "Project: %s  Revision: %d\n", projectID, revision)
 	fmt.Fprintf(&out, "Assignee WIP limit: %d\n", assigneeWIPLimit)
+	fmt.Fprintf(&out, "Total issues: %d  Open: %d  Done: %d\n", totalIssues, openIssues, doneIssues)
 	sep := "+" + strings.Repeat(strings.Repeat("-", boardCellWidth)+"+", len(cols))
 	out.WriteString(sep + "\n")
 	headerCells := make([]string, 0, len(cols))
