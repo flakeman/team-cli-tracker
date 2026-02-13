@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"encoding/pem"
@@ -18,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -1149,9 +1153,11 @@ func runServe(args []string) {
 	if err != nil {
 		fatal(err)
 	}
+	signKey := sha256.Sum256(id.Priv)
 	s := &syncServer{
 		projectID:            *projectID,
 		nodeID:               id.NodeID,
+		dataDir:              *dataDir,
 		log:                  log,
 		peers:                peers,
 		nodeRole:             strings.ToLower(strings.TrimSpace(*nodeRole)),
@@ -1174,6 +1180,7 @@ func runServe(args []string) {
 		peerSync:             map[string]peerSyncState{},
 		discoveredPeers:      map[string]int64{},
 		peerNodeByURL:        map[string]string{},
+		attachmentSignKey:    signKey[:],
 	}
 
 	mux := http.NewServeMux()
@@ -1191,10 +1198,14 @@ func runServe(args []string) {
 	register("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	register("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
 	register("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
+	register("/issue/attachment/initiate", s.withAuthRoles(s.issueAttachmentInitiate, "admin", "lead", "dev", "qa"))
+	register("/issue/attachment/complete", s.withAuthRoles(s.issueAttachmentComplete, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/add", s.withAuthRoles(s.issueAttachmentAdd, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/remove", s.withAuthRoles(s.issueAttachmentRemove, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/list", s.withAuthRoles(s.issueAttachmentList, "admin", "lead", "dev", "qa", "viewer"))
 	register("/issue/attachment/open", s.withAuthRoles(s.issueAttachmentOpen, "admin", "lead", "dev", "qa", "viewer"))
+	register("/attachments/upload", s.attachmentsUpload)
+	register("/attachments/download", s.attachmentsDownload)
 	register("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	register("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	register("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
@@ -1246,6 +1257,7 @@ func runServe(args []string) {
 type syncServer struct {
 	projectID                string
 	nodeID                   string
+	dataDir                  string
 	log                      *store.EventLog
 	peers                    []string
 	nodeRole                 string
@@ -1280,6 +1292,7 @@ type syncServer struct {
 	peerSync                 map[string]peerSyncState
 	discoveredPeers          map[string]int64
 	peerNodeByURL            map[string]string
+	attachmentSignKey        []byte
 }
 
 type peerSyncState struct {
@@ -1315,6 +1328,25 @@ type issueAttachmentAddRequest struct {
 	Title     string `json:"title"`
 }
 
+type issueAttachmentInitiateRequest struct {
+	ProjectID   string `json:"project_id"`
+	IssueID     string `json:"issue_id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
+	Title       string `json:"title"`
+}
+
+type issueAttachmentCompleteRequest struct {
+	ProjectID    string `json:"project_id"`
+	IssueID      string `json:"issue_id"`
+	AttachmentID string `json:"attachment_id"`
+	Filename     string `json:"filename"`
+	ContentType  string `json:"content_type"`
+	SizeBytes    int64  `json:"size_bytes"`
+	Title        string `json:"title"`
+}
+
 type issueAttachmentRemoveRequest struct {
 	ProjectID     string `json:"project_id"`
 	IssueID       string `json:"issue_id"`
@@ -1325,6 +1357,14 @@ type issueAttachmentOpenRequest struct {
 	ProjectID     string `json:"project_id"`
 	IssueID       string `json:"issue_id"`
 	AttachmentID  string `json:"attachment_id"`
+}
+
+type attachmentSignedToken struct {
+	Op           string `json:"op"`
+	ProjectID    string `json:"project_id"`
+	IssueID      string `json:"issue_id"`
+	AttachmentID string `json:"attachment_id"`
+	ExpiresAt    int64  `json:"exp"`
 }
 
 type governanceReconfigureRequest struct {
@@ -2728,6 +2768,106 @@ func (s *syncServer) issueComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "commented"})
 }
 
+func (s *syncServer) issueAttachmentInitiate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueAttachmentInitiateRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.Filename = strings.TrimSpace(in.Filename)
+	in.ContentType = strings.TrimSpace(in.ContentType)
+	in.Title = strings.TrimSpace(in.Title)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.Filename == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if in.SizeBytes < 0 || in.SizeBytes > 25*1024*1024 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "size_bytes out of range"})
+		return
+	}
+	attachmentID := fmt.Sprintf("%s-%d", in.IssueID, time.Now().UTC().UnixNano())
+	token, err := s.signAttachmentToken(attachmentSignedToken{
+		Op:           "upload",
+		ProjectID:    in.ProjectID,
+		IssueID:      in.IssueID,
+		AttachmentID: attachmentID,
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute).Unix(),
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	base := requestBaseURL(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"attachment_id": attachmentID,
+		"upload_url":    base + "/api/v1/attachments/upload?token=" + url.QueryEscape(token),
+		"expires_in_sec": 300,
+	})
+}
+
+func (s *syncServer) issueAttachmentComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueAttachmentCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.AttachmentID = strings.TrimSpace(in.AttachmentID)
+	in.Filename = strings.TrimSpace(in.Filename)
+	in.ContentType = strings.TrimSpace(in.ContentType)
+	in.Title = strings.TrimSpace(in.Title)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.AttachmentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	storageKey := attachmentStorageKey(in.ProjectID, in.IssueID, in.AttachmentID)
+	fullPath := filepath.Join(s.dataDir, "attachments", storageKey)
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "uploaded object not found"})
+		return
+	}
+	if in.SizeBytes <= 0 {
+		in.SizeBytes = info.Size()
+	}
+	if in.Title == "" {
+		in.Title = in.Filename
+	}
+	if in.ContentType == "" {
+		in.ContentType = "application/octet-stream"
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.attachment.added", map[string]any{
+		"attachment_id": in.AttachmentID,
+		"title":         in.Title,
+		"url":           "",
+		"storage_key":   storageKey,
+		"filename":      in.Filename,
+		"content_type":  in.ContentType,
+		"size_bytes":    in.SizeBytes,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "completed", "attachment_id": in.AttachmentID})
+}
+
 func (s *syncServer) issueAttachmentAdd(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -2842,11 +2982,127 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 	}
 	for _, it := range items {
 		if it.ID == in.AttachmentID {
+			if strings.TrimSpace(it.StorageKey) != "" {
+				token, err := s.signAttachmentToken(attachmentSignedToken{
+					Op:           "download",
+					ProjectID:    in.ProjectID,
+					IssueID:      in.IssueID,
+					AttachmentID: it.ID,
+					ExpiresAt:    time.Now().UTC().Add(5 * time.Minute).Unix(),
+				})
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				base := requestBaseURL(r)
+				writeJSON(w, http.StatusOK, map[string]any{
+					"attachment_id": it.ID,
+					"title":         it.Title,
+					"url":           base + "/api/v1/attachments/download?token=" + url.QueryEscape(token),
+					"expires_in_sec": 300,
+				})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{"attachment_id": it.ID, "title": it.Title, "url": it.URL})
 			return
 		}
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
+}
+
+func (s *syncServer) attachmentsUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	claims, err := s.verifyAttachmentToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
+	if claims.Op != "upload" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "token op mismatch"})
+		return
+	}
+	if claims.ProjectID != s.projectID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "project mismatch"})
+		return
+	}
+	const maxUploadBytes = 25 * 1024 * 1024
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxUploadBytes+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "read upload failed"})
+		return
+	}
+	if int64(len(data)) > maxUploadBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upload too large"})
+		return
+	}
+	storageKey := attachmentStorageKey(claims.ProjectID, claims.IssueID, claims.AttachmentID)
+	fullPath := filepath.Join(s.dataDir, "attachments", storageKey)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := os.WriteFile(fullPath, data, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "uploaded", "size_bytes": len(data)})
+}
+
+func (s *syncServer) attachmentsDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	claims, err := s.verifyAttachmentToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
+	if claims.Op != "download" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "token op mismatch"})
+		return
+	}
+	if claims.ProjectID != s.projectID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "project mismatch"})
+		return
+	}
+	items, err := listIssueAttachments(s.log, claims.ProjectID, claims.IssueID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var picked *issueAttachmentProjection
+	for i := range items {
+		if items[i].ID == claims.AttachmentID {
+			picked = &items[i]
+			break
+		}
+	}
+	if picked == nil || strings.TrimSpace(picked.StorageKey) == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
+		return
+	}
+	fullPath := filepath.Join(s.dataDir, "attachments", picked.StorageKey)
+	bin, err := os.ReadFile(fullPath)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+	ct := strings.TrimSpace(picked.ContentType)
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	if strings.TrimSpace(picked.Filename) != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", strings.ReplaceAll(picked.Filename, "\"", "")))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(bin)
 }
 
 func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
@@ -3366,9 +3622,13 @@ type issueProjection struct {
 }
 
 type issueAttachmentProjection struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	StorageKey  string `json:"storage_key,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
 }
 
 func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[string][]issueProjection {
@@ -3464,31 +3724,48 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 				AttachmentID string `json:"attachment_id"`
 				URL          string `json:"url"`
 				Title        string `json:"title"`
+				StorageKey   string `json:"storage_key"`
+				Filename     string `json:"filename"`
+				ContentType  string `json:"content_type"`
+				SizeBytes    int64  `json:"size_bytes"`
 			}
 			_ = json.Unmarshal(e.Payload, &p)
 			id := strings.TrimSpace(p.AttachmentID)
 			url := strings.TrimSpace(p.URL)
-			if id == "" || url == "" {
+			storageKey := strings.TrimSpace(p.StorageKey)
+			if id == "" || (url == "" && storageKey == "") {
 				break
 			}
 			title := strings.TrimSpace(p.Title)
 			if title == "" {
-				title = url
+				if strings.TrimSpace(p.Filename) != "" {
+					title = strings.TrimSpace(p.Filename)
+				} else {
+					title = url
+				}
 			}
 			replaced := false
 			for i := range it.Attachments {
 				if it.Attachments[i].ID == id {
 					it.Attachments[i].Title = title
 					it.Attachments[i].URL = url
+					it.Attachments[i].StorageKey = storageKey
+					it.Attachments[i].Filename = strings.TrimSpace(p.Filename)
+					it.Attachments[i].ContentType = strings.TrimSpace(p.ContentType)
+					it.Attachments[i].SizeBytes = p.SizeBytes
 					replaced = true
 					break
 				}
 			}
 			if !replaced {
 				it.Attachments = append(it.Attachments, issueAttachmentProjection{
-					ID:    id,
-					Title: title,
-					URL:   url,
+					ID:          id,
+					Title:       title,
+					URL:         url,
+					StorageKey:  storageKey,
+					Filename:    strings.TrimSpace(p.Filename),
+					ContentType: strings.TrimSpace(p.ContentType),
+					SizeBytes:   p.SizeBytes,
 				})
 			}
 		case "issue.attachment.removed":
@@ -3882,6 +4159,62 @@ func writeJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") || r.TLS != nil {
+		scheme = "https"
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return scheme + "://" + host
+}
+
+func attachmentStorageKey(projectID, issueID, attachmentID string) string {
+	return filepath.Join(strings.TrimSpace(projectID), strings.TrimSpace(issueID), strings.TrimSpace(attachmentID)+".bin")
+}
+
+func (s *syncServer) signAttachmentToken(claims attachmentSignedToken) (string, error) {
+	raw, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, s.attachmentSignKey)
+	_, _ = mac.Write(raw)
+	sig := mac.Sum(nil)
+	return base64.RawURLEncoding.EncodeToString(raw) + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+func (s *syncServer) verifyAttachmentToken(token string) (attachmentSignedToken, error) {
+	var out attachmentSignedToken
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) != 2 {
+		return out, fmt.Errorf("invalid token")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return out, err
+	}
+	gotSig, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return out, err
+	}
+	mac := hmac.New(sha256.New, s.attachmentSignKey)
+	_, _ = mac.Write(raw)
+	wantSig := mac.Sum(nil)
+	if !hmac.Equal(gotSig, wantSig) {
+		return out, fmt.Errorf("signature mismatch")
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, err
+	}
+	if out.ExpiresAt <= time.Now().UTC().Unix() {
+		return out, fmt.Errorf("token expired")
+	}
+	return out, nil
 }
 
 func validateTransitionProtected(policyURL, projectID, issueID, from, to string) error {

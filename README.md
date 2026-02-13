@@ -129,7 +129,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/team/list"
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/security/audit/export?all=1"
 
-# Attachments (MVP links): add/list/open/remove
+# Attachments (MVP)
+# A) quick link-mode: add/list/open/remove
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"project_id":"OPS","issue_id":"OPS-101","url":"https://files.example.com/spec.pdf","title":"Spec PDF"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/add"
@@ -138,6 +139,18 @@ curl -H "Authorization: Bearer <token>" \
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"OPS-101-1739465000000000000"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/open"
+
+# B) file upload flow: initiate -> upload -> complete -> open
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","filename":"spec.pdf","content_type":"application/pdf","size_bytes":12345,"title":"Spec PDF"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/initiate"
+# response has: attachment_id + upload_url
+
+curl -X PUT --data-binary @./spec.pdf "<upload_url_from_initiate>"
+
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>","filename":"spec.pdf","content_type":"application/pdf"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
 ```
 
 ### Документация
