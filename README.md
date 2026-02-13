@@ -128,6 +128,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 # Master API (v1 namespace, совместим с текущими endpoint'ами)
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/team/list"
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/security/audit/export?all=1"
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","from":"todo","to":"in_progress"}' \
+  "http://127.0.0.1:4101/api/v1/issue/transition"
 
 # Attachments (MVP)
 # A) quick link-mode: add/list/open/remove
@@ -159,6 +162,7 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/verify"
+# note: URL-only attachments are marked integrity_verified=false and are not binary-verifiable
 
 # verify all attachments in project (or pass issue_id to scope)
 curl -H "Authorization: Bearer <token>" \

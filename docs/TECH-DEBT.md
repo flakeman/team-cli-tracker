@@ -85,27 +85,27 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 3. Regression tests cover env-fallback and explicit-assignee scenarios.
 
 ### TD-011 Master API parity completion for issue mutation flow
-- Status: Open
+- Status: Closed
 - Impact: API control-plane is mostly unified, but issue mutation surface is still partially fragmented between `/issue/*` and `/raft/*` semantics.
-- Current state: `/api/v1/*` namespace is available for existing handlers, including issue create/comment and attachment flows; transition/governance mutation paths still require clearer endpoint-level parity and contract consolidation.
+- Current state: `/api/v1/*` namespace is available for existing handlers, including dedicated issue mutation endpoints (`/issue/create`, `/issue/transition`, `/issue/comment`) and attachment flows; compatibility path remains available for legacy routes.
 - Exit criteria:
 1. Stable `api/v1` endpoints cover all core issue mutations with explicit contracts (including transition path).
 2. API contract tests validate parity with CLI behavior and authz outcomes.
 3. Legacy path compatibility remains documented until deprecation window is defined.
 
 ### TD-012 Attachment integrity model gap for URL-only mode
-- Status: Open
+- Status: Closed
 - Impact: URL-mode attachments (`issue/attachment/add`) cannot provide binary integrity guarantees because file bytes are external to platform storage.
-- Current state: file-mode attachments enforce `sha256` on complete and support verify/verify-all; URL-only mode remains metadata-only.
+- Current state: file-mode attachments enforce `sha256` on complete and support verify/verify-all; URL-only mode is explicitly marked as non-verified (`integrity_verified=false`) and `verify` returns non-verifiable status for external URLs.
 - Exit criteria:
 1. URL-only mode is either restricted by policy or explicitly marked non-verified in API/UI.
 2. Security/audit events distinguish verified file attachments vs URL references.
 3. Documentation defines risk model and recommended production mode.
 
 ### TD-013 Periodic integrity verification execution policy
-- Status: Open
+- Status: Closed
 - Impact: running periodic attachment verification independently on each node can create duplicate scans and noisy audit trails at scale.
-- Current state: `--attachment-verify-interval` starts local periodic verify loop on any node where enabled.
+- Current state: `--attachment-verify-interval` starts scheduler only on leader policy (`preferred-leader` when set, otherwise `admin` node role), with per-node metrics exposing scheduler activity.
 - Exit criteria:
 1. Leader-only or single-runner scheduling policy exists for periodic verify.
 2. Metrics clearly separate scheduler node from passive nodes.

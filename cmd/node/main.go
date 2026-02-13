@@ -1240,6 +1240,7 @@ func runServe(args []string) {
 	register("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	register("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	register("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
+	register("/issue/transition", s.withAuthRoles(s.issueTransition, "admin", "lead", "dev", "qa"))
 	register("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/initiate", s.withAuthRoles(s.issueAttachmentInitiate, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/complete", s.withAuthRoles(s.issueAttachmentComplete, "admin", "lead", "dev", "qa"))
@@ -1287,7 +1288,10 @@ func runServe(args []string) {
 
 	go s.syncLoop(*tick)
 	if *attachmentVerifyInterval > 0 {
-		go s.attachmentVerifyLoop(*attachmentVerifyInterval)
+		if s.shouldRunAttachmentVerifyScheduler() {
+			s.attachmentVerifySchedulerActive = true
+			go s.attachmentVerifyLoop(*attachmentVerifyInterval)
+		}
 	}
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
 	server := &http.Server{Addr: *listenAddr, Handler: mux, TLSConfig: serverTLS}
@@ -1348,6 +1352,7 @@ type syncServer struct {
 	attachmentVerifyChecked  atomic.Uint64
 	attachmentVerifyMismatch atomic.Uint64
 	attachmentVerifyErrors   atomic.Uint64
+	attachmentVerifySchedulerActive bool
 }
 
 type peerSyncState struct {
@@ -1374,6 +1379,13 @@ type issueCommentRequest struct {
 	ProjectID string `json:"project_id"`
 	IssueID   string `json:"issue_id"`
 	Text      string `json:"text"`
+}
+
+type issueTransitionRequest struct {
+	ProjectID string `json:"project_id"`
+	IssueID   string `json:"issue_id"`
+	From      string `json:"from"`
+	To        string `json:"to"`
 }
 
 type issueAttachmentAddRequest struct {
@@ -2840,6 +2852,41 @@ func (s *syncServer) issueComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "commented"})
 }
 
+func (s *syncServer) issueTransition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueTransitionRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.From = strings.TrimSpace(in.From)
+	in.To = strings.TrimSpace(in.To)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.To == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := validateWorkflowTransition(in.From, in.To); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.transition", map[string]string{
+		"from": in.From,
+		"to":   in.To,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "transitioned"})
+}
+
 func (s *syncServer) issueAttachmentInitiate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -3124,6 +3171,7 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 						"url":            getURL.String(),
 						"expires_in_sec": 300,
 						"checksum_sha256": it.ChecksumSHA256,
+						"integrity_verified": it.IntegrityVerified,
 					})
 					return
 				}
@@ -3145,10 +3193,11 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 					"url":           base + "/api/v1/attachments/download?token=" + url.QueryEscape(token),
 					"expires_in_sec": 300,
 					"checksum_sha256": it.ChecksumSHA256,
+					"integrity_verified": it.IntegrityVerified,
 				})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"attachment_id": it.ID, "title": it.Title, "url": it.URL, "checksum_sha256": it.ChecksumSHA256})
+			writeJSON(w, http.StatusOK, map[string]any{"attachment_id": it.ID, "title": it.Title, "url": it.URL, "checksum_sha256": it.ChecksumSHA256, "integrity_verified": it.IntegrityVerified})
 			return
 		}
 	}
@@ -3397,6 +3446,7 @@ func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 		"attachment_verify_checked":   s.attachmentVerifyChecked.Load(),
 		"attachment_verify_mismatch":  s.attachmentVerifyMismatch.Load(),
 		"attachment_verify_errors":    s.attachmentVerifyErrors.Load(),
+		"attachment_verify_scheduler_active": s.attachmentVerifySchedulerActive,
 	})
 }
 
@@ -3464,6 +3514,14 @@ func (s *syncServer) attachmentVerifyLoop(interval time.Duration) {
 			})
 		}
 	}
+}
+
+func (s *syncServer) shouldRunAttachmentVerifyScheduler() bool {
+	preferred := strings.TrimSpace(s.preferredLeader)
+	if preferred != "" {
+		return strings.EqualFold(strings.TrimSpace(s.nodeID), preferred)
+	}
+	return strings.EqualFold(strings.TrimSpace(s.nodeRole), "admin")
 }
 
 func (s *syncServer) pullFromPeer(peer string) bool {
@@ -3938,6 +3996,7 @@ type issueAttachmentProjection struct {
 	ContentType string `json:"content_type,omitempty"`
 	SizeBytes   int64  `json:"size_bytes,omitempty"`
 	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
+	IntegrityVerified bool `json:"integrity_verified"`
 }
 
 func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[string][]issueProjection {
@@ -4055,6 +4114,7 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 				}
 			}
 			replaced := false
+			integrityVerified := (storageKey != "" && strings.ToLower(strings.TrimSpace(p.ChecksumSHA256)) != "")
 			for i := range it.Attachments {
 				if it.Attachments[i].ID == id {
 					it.Attachments[i].Title = title
@@ -4064,6 +4124,7 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 					it.Attachments[i].ContentType = strings.TrimSpace(p.ContentType)
 					it.Attachments[i].SizeBytes = p.SizeBytes
 					it.Attachments[i].ChecksumSHA256 = strings.ToLower(strings.TrimSpace(p.ChecksumSHA256))
+					it.Attachments[i].IntegrityVerified = integrityVerified
 					replaced = true
 					break
 				}
@@ -4078,6 +4139,7 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 					ContentType: strings.TrimSpace(p.ContentType),
 					SizeBytes:   p.SizeBytes,
 					ChecksumSHA256: strings.ToLower(strings.TrimSpace(p.ChecksumSHA256)),
+					IntegrityVerified: integrityVerified,
 				})
 			}
 		case "issue.attachment.removed":
@@ -4565,9 +4627,8 @@ func (s *syncServer) verifyAttachmentProjection(issueID string, att issueAttachm
 		return res
 	}
 	if strings.TrimSpace(att.StorageKey) == "" {
-		// URL-only mode: binary is external; compare metadata checksum only.
-		res.ComputedSHA256 = stored
-		res.Match = true
+		// URL-only mode is explicitly non-verifiable for binary integrity.
+		res.Error = "url-only attachment is not binary-verifiable"
 		return res
 	}
 	var computed string
