@@ -431,6 +431,12 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 			return false, "view must be all or mine"
 		}
 	case "create":
+		if strings.TrimSpace(in.policyURL) != "" {
+			if err := requestIssueCreateProtected(in.policyURL, in.projectID, cmd.args[0], cmd.args[1]); err != nil {
+				return false, err.Error()
+			}
+			return false, "created " + cmd.args[0]
+		}
 		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.create", map[string]string{
 			"status":     "todo",
 			"summary":    cmd.args[1],
@@ -456,6 +462,12 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 		}
 		return false, "moved " + cmd.args[0] + " " + cmd.args[1] + "->" + cmd.args[2]
 	case "comment":
+		if strings.TrimSpace(in.policyURL) != "" {
+			if err := requestIssueCommentProtected(in.policyURL, in.projectID, cmd.args[0], cmd.args[1]); err != nil {
+				return false, err.Error()
+			}
+			return false, "commented " + cmd.args[0]
+		}
 		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.comment", map[string]string{
 			"text": cmd.args[1],
 		}); err != nil {
@@ -1138,6 +1150,8 @@ func runServe(args []string) {
 	mux.HandleFunc("/sync/peers", s.withAuthAny(s.syncPeers))
 	mux.HandleFunc("/raft/vote-transition", s.withAuthRoles(s.raftVoteTransition, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
+	mux.HandleFunc("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
 	mux.HandleFunc("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	mux.HandleFunc("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
@@ -1235,6 +1249,20 @@ type transitionRequest struct {
 	IssueID   string `json:"issue_id"`
 	From      string `json:"from"`
 	To        string `json:"to"`
+}
+
+type issueCreateRequest struct {
+	ProjectID string `json:"project_id"`
+	IssueID   string `json:"issue_id"`
+	Summary   string `json:"summary"`
+	Priority  string `json:"priority"`
+	Assignee  string `json:"assignee"`
+}
+
+type issueCommentRequest struct {
+	ProjectID string `json:"project_id"`
+	IssueID   string `json:"issue_id"`
+	Text      string `json:"text"`
 }
 
 type governanceReconfigureRequest struct {
@@ -2568,6 +2596,67 @@ func (s *syncServer) raftValidateTransition(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+func (s *syncServer) issueCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID || strings.TrimSpace(in.IssueID) == "" || strings.TrimSpace(in.Summary) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if strings.TrimSpace(in.Priority) == "" {
+		in.Priority = "medium"
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, strings.TrimSpace(in.IssueID), "issue.create", map[string]string{
+		"status":     "todo",
+		"summary":    strings.TrimSpace(in.Summary),
+		"priority":   strings.TrimSpace(in.Priority),
+		"assignee":   strings.TrimSpace(in.Assignee),
+		"created_by": s.nodeID,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "created"})
+}
+
+func (s *syncServer) issueComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueCommentRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	if in.ProjectID != s.projectID || strings.TrimSpace(in.IssueID) == "" || strings.TrimSpace(in.Text) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, strings.TrimSpace(in.IssueID), "issue.comment", map[string]string{
+		"text": strings.TrimSpace(in.Text),
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "commented"})
+}
+
 func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 	last := atomic.LoadInt64(&s.lastSyncUnix)
 	lastSyncAt := ""
@@ -2963,6 +3052,10 @@ func appendIssueEvent(dataDir, nodeID, projectID, issueID, eventType string, pay
 	if err != nil {
 		return err
 	}
+	return appendIssueEventWithLog(log, id, projectID, issueID, eventType, payload)
+}
+
+func appendIssueEventWithLog(log *store.EventLog, id node.Identity, projectID, issueID, eventType string, payload any) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -3485,6 +3578,71 @@ func validateTransitionProtected(policyURL, projectID, issueID, from, to string)
 			out.Reason = "transition denied by protected policy"
 		}
 		return fmt.Errorf("%s (granted=%d needed=%d)", out.Reason, out.Granted, out.Needed)
+	}
+	return nil
+}
+
+func requestIssueCreateProtected(policyURL, projectID, issueID, summary string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reqBody := issueCreateRequest{
+		ProjectID: projectID,
+		IssueID:   issueID,
+		Summary:   summary,
+		Priority:  "medium",
+	}
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(policyURL, "/")+"/issue/create", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	if token := strings.TrimSpace(envOr("USER_TOKEN", "")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		return fmt.Errorf("policy create denied status=%d body=%s", res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func requestIssueCommentProtected(policyURL, projectID, issueID, text string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reqBody := issueCommentRequest{
+		ProjectID: projectID,
+		IssueID:   issueID,
+		Text:      text,
+	}
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(policyURL, "/")+"/issue/comment", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	if token := strings.TrimSpace(envOr("USER_TOKEN", "")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		return fmt.Errorf("policy comment denied status=%d body=%s", res.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
 }

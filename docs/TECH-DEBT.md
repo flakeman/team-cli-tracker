@@ -67,9 +67,9 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 3. Runbook links to alert IDs and response procedures.
 
 ### TD-009 Interactive command path parity with protected policy flow
-- Status: Open
+- Status: Closed
 - Impact: interactive `board` commands (`create/move/comment`) currently append events directly in local store and may diverge from stricter protected API/policy paths used in secured deployments.
-- Current state: interactive `move` supports protected validation via `--interactive-policy-url` (env fallback `BOARD_INTERACTIVE_POLICY_URL`/`POLICY_URL`) before append; interactive `create`/`comment` still use local append-only path.
+- Current state: interactive `move` validates through protected policy path (`--interactive-policy-url` / env fallback), and interactive `create`/`comment` use protected API endpoints (`/issue/create`, `/issue/comment`) when policy URL is configured; local mode remains explicit fallback for non-protected setups.
 - Exit criteria:
 1. Interactive command execution supports policy-aware mode equivalent to production-protected transition path.
 2. Clear mode contract in CLI/help/docs: local-append vs protected API execution.

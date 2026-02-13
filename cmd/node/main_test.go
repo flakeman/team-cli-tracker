@@ -509,6 +509,68 @@ func TestInteractiveMovePolicyAllowAppends(t *testing.T) {
 	}
 }
 
+func TestInteractiveCreatePolicyDenyDoesNotAppend(t *testing.T) {
+	dataDir := t.TempDir()
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+	}))
+	defer srv.Close()
+	in := boardInteractiveInput{
+		projectID: "OPS",
+		nodeID:    "node-1",
+		dataDir:   dataDir,
+		policyURL: srv.URL,
+		state:     &boardRenderState{},
+	}
+	before, _ := logDB.ReadAll()
+	_, msg := applyBoardInteractiveCommand("create OPS-C1 test create", in)
+	after, _ := logDB.ReadAll()
+	if len(after) != len(before) {
+		t.Fatalf("event appended on denied create: before=%d after=%d", len(before), len(after))
+	}
+	if !strings.Contains(strings.ToLower(msg), "denied") && !strings.Contains(strings.ToLower(msg), "status") {
+		t.Fatalf("unexpected message: %s", msg)
+	}
+}
+
+func TestInteractiveCommentPolicyAllowAppends(t *testing.T) {
+	dataDir := t.TempDir()
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	// allow create/comment endpoints in test server
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}))
+	defer srv.Close()
+	in := boardInteractiveInput{
+		projectID: "OPS",
+		nodeID:    "node-1",
+		dataDir:   dataDir,
+		policyURL: srv.URL,
+		state:     &boardRenderState{},
+	}
+	// create via protected endpoint should not append locally in this mode.
+	before, _ := logDB.ReadAll()
+	_, _ = applyBoardInteractiveCommand("create OPS-C2 test", in)
+	mid, _ := logDB.ReadAll()
+	if len(mid) != len(before) {
+		t.Fatalf("expected no local append for protected create path")
+	}
+	// comment via protected endpoint should not append locally in this mode.
+	_, _ = applyBoardInteractiveCommand("comment OPS-C2 hello", in)
+	after, _ := logDB.ReadAll()
+	if len(after) != len(before) {
+		t.Fatalf("expected no local append for protected comment path")
+	}
+}
+
 func TestParseBoardInteractiveCommand(t *testing.T) {
 	cases := []struct {
 		in   string
