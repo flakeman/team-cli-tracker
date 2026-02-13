@@ -71,6 +71,12 @@ go run ./cmd/node
 # отрисовать доску из API трекера
 go run ./cmd/node board --project-id OPS
 
+# отрисовать только свои задачи
+go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
+
+# быстрая сводка по количеству задач в столбцах
+go run ./cmd/node board --project-id OPS --counts-only
+
 # вывести машиночитаемый JSON
 go run ./cmd/node board --project-id OPS -format json
 
@@ -218,6 +224,12 @@ go run ./cmd/node
 
 # render board from tracker API
 go run ./cmd/node board --project-id OPS
+
+# render only my tasks
+go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
+
+# counts-only summary
+go run ./cmd/node board --project-id OPS --counts-only
 
 # machine-readable output
 go run ./cmd/node board --project-id OPS -format json

@@ -357,6 +357,56 @@ func TestRenderBoardPlainDeterministicAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestFilterBoardByAssignee(t *testing.T) {
+	board := map[string][]issueProjection{
+		"todo":        {{ID: "OPS-1", Summary: "a", Assignee: "u1"}, {ID: "OPS-2", Summary: "b", Assignee: "u2"}},
+		"in_progress": {{ID: "OPS-3", Summary: "c", Assignee: "u1"}},
+		"code_review": {},
+		"testing":     {},
+		"done":        {{ID: "OPS-4", Summary: "d", Assignee: "u2"}},
+	}
+	out := filterBoardByAssignee(board, "u1")
+	if len(out["todo"]) != 1 || out["todo"][0].ID != "OPS-1" {
+		t.Fatalf("unexpected todo filter: %+v", out["todo"])
+	}
+	if len(out["in_progress"]) != 1 || out["in_progress"][0].ID != "OPS-3" {
+		t.Fatalf("unexpected in_progress filter: %+v", out["in_progress"])
+	}
+	if len(out["done"]) != 0 {
+		t.Fatalf("unexpected done filter: %+v", out["done"])
+	}
+}
+
+func TestPrintBoardCounts(t *testing.T) {
+	board := map[string][]issueProjection{
+		"todo":        {{ID: "OPS-1", Summary: "a", Assignee: "u1"}},
+		"in_progress": {{ID: "OPS-2", Summary: "b", Assignee: "u1"}},
+		"code_review": {},
+		"testing":     {},
+		"done":        {{ID: "OPS-3", Summary: "c", Assignee: "u1"}},
+	}
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	printBoardCounts("OPS", board, 9)
+	_ = w.Close()
+	os.Stdout = oldStdout
+	raw, _ := io.ReadAll(r)
+	out := string(raw)
+	if !strings.Contains(out, "Project: OPS  Revision: 9") {
+		t.Fatalf("missing revision: %s", out)
+	}
+	if !strings.Contains(out, "Total issues: 3  Open: 2  Done: 1") {
+		t.Fatalf("missing totals: %s", out)
+	}
+	if !strings.Contains(out, "To Do=1 In Progress=1 Code Review=0 Testing=0 Done=1") {
+		t.Fatalf("missing column counts: %s", out)
+	}
+}
+
 func TestFilterAuditEventsByTimeAndUser(t *testing.T) {
 	in := []audit.Event{
 		{Time: "2026-02-12T10:00:00Z", Type: "team.onboard", Actor: "u1", Status: "ok"},

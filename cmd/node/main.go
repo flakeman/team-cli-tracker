@@ -176,6 +176,9 @@ func runBoard(args []string) {
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	format := fs.String("format", "plain", "plain|json")
+	view := fs.String("view", "all", "all|mine")
+	assigneeID := fs.String("assignee-id", envOr("BOARD_ASSIGNEE_ID", ""), "assignee id for mine view")
+	countsOnly := fs.Bool("counts-only", false, "print only column counts (plain mode)")
 	once := fs.Bool("once", false, "print once and exit (plain mode defaults to live updates)")
 	refresh := fs.Duration("refresh", mustDuration(envOr("BOARD_REFRESH", "2s"), 2*time.Second), "live board refresh interval")
 	peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs for board sync")
@@ -218,12 +221,31 @@ func runBoard(args []string) {
 			return err
 		}
 		board := projectBoardFromEvents(*projectID, all)
+		mode := strings.ToLower(strings.TrimSpace(*view))
+		switch mode {
+		case "all", "":
+		case "mine":
+			target := strings.TrimSpace(*assigneeID)
+			if target == "" {
+				target = strings.TrimSpace(envOr("USER_ID", envOr("USER", "")))
+			}
+			if target == "" {
+				return fmt.Errorf("mine view requires --assignee-id or USER_ID")
+			}
+			board = filterBoardByAssignee(board, target)
+		default:
+			return fmt.Errorf("unsupported --view value: %s", *view)
+		}
 		switch *format {
 		case "json":
 			raw, _ := json.MarshalIndent(board, "", "  ")
 			fmt.Println(string(raw))
 		default:
-			printBoardPlain(*projectID, board, len(all))
+			if *countsOnly {
+				printBoardCounts(*projectID, board, len(all))
+			} else {
+				printBoardPlain(*projectID, board, len(all))
+			}
 		}
 		return nil
 	}
@@ -2840,6 +2862,21 @@ func printBoardPlain(projectID string, board map[string][]issueProjection, revis
 	fmt.Print(renderBoardPlain(projectID, board, revision))
 }
 
+func printBoardCounts(projectID string, board map[string][]issueProjection, revision int) {
+	const assigneeWIPLimit = 3
+	totalIssues := 0
+	doneIssues := len(board["done"])
+	for _, items := range board {
+		totalIssues += len(items)
+	}
+	openIssues := totalIssues - doneIssues
+	fmt.Printf("Project: %s  Revision: %d\n", projectID, revision)
+	fmt.Printf("Assignee WIP limit: %d\n", assigneeWIPLimit)
+	fmt.Printf("Total issues: %d  Open: %d  Done: %d\n", totalIssues, openIssues, doneIssues)
+	fmt.Printf("To Do=%d In Progress=%d Code Review=%d Testing=%d Done=%d\n",
+		len(board["todo"]), len(board["in_progress"]), len(board["code_review"]), len(board["testing"]), len(board["done"]))
+}
+
 func renderBoardPlain(projectID string, board map[string][]issueProjection, revision int) string {
 	const boardCellWidth = 34
 	const assigneeWIPLimit = 3
@@ -2922,6 +2959,27 @@ func padOrTrim(s string, w int) string {
 	return s
 }
 
+func filterBoardByAssignee(board map[string][]issueProjection, assignee string) map[string][]issueProjection {
+	target := strings.TrimSpace(assignee)
+	out := map[string][]issueProjection{
+		"todo":        {},
+		"in_progress": {},
+		"code_review": {},
+		"testing":     {},
+		"done":        {},
+	}
+	for k, items := range board {
+		filtered := make([]issueProjection, 0, len(items))
+		for _, it := range items {
+			if strings.TrimSpace(it.Assignee) == target {
+				filtered = append(filtered, it)
+			}
+		}
+		out[k] = filtered
+	}
+	return out
+}
+
 func printUsage() {
 	fmt.Println("team-cli-tracker node")
 	fmt.Println("usage:")
@@ -2929,7 +2987,7 @@ func printUsage() {
 	fmt.Println("  node issue create --project-id OPS --issue-id OPS-1 --summary \"...\" [--priority high] [--assignee user]")
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
-	fmt.Println("  node board --project-id OPS [--format plain|json] [--once] [--refresh 2s] [--peers http://127.0.0.1:4102]")
+	fmt.Println("  node board --project-id OPS [--format plain|json] [--view all|mine] [--assignee-id u1] [--counts-only] [--once] [--refresh 2s] [--peers http://127.0.0.1:4102]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
 	fmt.Println("  node storage enable-encryption [--data-dir ./data]")
 	fmt.Println("  node storage rotate-key [--data-dir ./data] [--enforce-due] [--max-age 720h]")
