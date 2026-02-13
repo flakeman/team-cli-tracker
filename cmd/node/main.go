@@ -1191,6 +1191,10 @@ func runServe(args []string) {
 	register("/raft/validate-transition", s.withAuthRoles(s.raftValidateTransition, "admin", "lead"))
 	register("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
 	register("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
+	register("/issue/attachment/add", s.withAuthRoles(s.issueAttachmentAdd, "admin", "lead", "dev", "qa"))
+	register("/issue/attachment/remove", s.withAuthRoles(s.issueAttachmentRemove, "admin", "lead", "dev", "qa"))
+	register("/issue/attachment/list", s.withAuthRoles(s.issueAttachmentList, "admin", "lead", "dev", "qa", "viewer"))
+	register("/issue/attachment/open", s.withAuthRoles(s.issueAttachmentOpen, "admin", "lead", "dev", "qa", "viewer"))
 	register("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
 	register("/raft/validate-governance-reconfigure", s.withAuthRoles(s.raftValidateGovernanceReconfigure, "admin", "lead"))
 	register("/raft/vote-team-offboard", s.withAuthRoles(s.raftVoteTeamOffboard, "admin", "lead"))
@@ -1302,6 +1306,25 @@ type issueCommentRequest struct {
 	ProjectID string `json:"project_id"`
 	IssueID   string `json:"issue_id"`
 	Text      string `json:"text"`
+}
+
+type issueAttachmentAddRequest struct {
+	ProjectID string `json:"project_id"`
+	IssueID   string `json:"issue_id"`
+	URL       string `json:"url"`
+	Title     string `json:"title"`
+}
+
+type issueAttachmentRemoveRequest struct {
+	ProjectID     string `json:"project_id"`
+	IssueID       string `json:"issue_id"`
+	AttachmentID  string `json:"attachment_id"`
+}
+
+type issueAttachmentOpenRequest struct {
+	ProjectID     string `json:"project_id"`
+	IssueID       string `json:"issue_id"`
+	AttachmentID  string `json:"attachment_id"`
 }
 
 type governanceReconfigureRequest struct {
@@ -2705,6 +2728,127 @@ func (s *syncServer) issueComment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "commented"})
 }
 
+func (s *syncServer) issueAttachmentAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueAttachmentAddRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.URL = strings.TrimSpace(in.URL)
+	in.Title = strings.TrimSpace(in.Title)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	attachmentID := fmt.Sprintf("%s-%d", in.IssueID, time.Now().UTC().UnixNano())
+	if in.Title == "" {
+		in.Title = in.URL
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.attachment.added", map[string]string{
+		"attachment_id": attachmentID,
+		"url":           in.URL,
+		"title":         in.Title,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "added", "attachment_id": attachmentID})
+}
+
+func (s *syncServer) issueAttachmentRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueAttachmentRemoveRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.AttachmentID = strings.TrimSpace(in.AttachmentID)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.AttachmentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.attachment.removed", map[string]string{
+		"attachment_id": in.AttachmentID,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "removed"})
+}
+
+func (s *syncServer) issueAttachmentList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	projectID := strings.TrimSpace(r.URL.Query().Get("project_id"))
+	if projectID == "" {
+		projectID = s.projectID
+	}
+	issueID := strings.TrimSpace(r.URL.Query().Get("issue_id"))
+	if projectID != s.projectID || issueID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project_id and issue_id are required"})
+		return
+	}
+	items, err := listIssueAttachments(s.log, projectID, issueID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issue_id": issueID, "attachments": items})
+}
+
+func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueAttachmentOpenRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.AttachmentID = strings.TrimSpace(in.AttachmentID)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.AttachmentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	items, err := listIssueAttachments(s.log, in.ProjectID, in.IssueID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, it := range items {
+		if it.ID == in.AttachmentID {
+			writeJSON(w, http.StatusOK, map[string]any{"attachment_id": it.ID, "title": it.Title, "url": it.URL})
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
+}
+
 func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 	last := atomic.LoadInt64(&s.lastSyncUnix)
 	lastSyncAt := ""
@@ -3218,6 +3362,13 @@ type issueProjection struct {
 	Priority string   `json:"priority"`
 	Assignee string   `json:"assignee"`
 	Comments []string `json:"comments"`
+	Attachments []issueAttachmentProjection `json:"attachments,omitempty"`
+}
+
+type issueAttachmentProjection struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[string][]issueProjection {
@@ -3252,7 +3403,13 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 	for _, e := range filtered {
 		it := issues[e.EntityID]
 		if it.ID == "" {
-			it = issueProjection{ID: e.EntityID, Status: "todo", Priority: "medium", Comments: make([]string, 0)}
+			it = issueProjection{
+				ID:          e.EntityID,
+				Status:      "todo",
+				Priority:    "medium",
+				Comments:    make([]string, 0),
+				Attachments: make([]issueAttachmentProjection, 0),
+			}
 		}
 		switch e.Type {
 		case "issue.create":
@@ -3302,6 +3459,55 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 			} else {
 				it.Assignee = strings.TrimSpace(p.Assignee)
 			}
+		case "issue.attachment.added":
+			var p struct {
+				AttachmentID string `json:"attachment_id"`
+				URL          string `json:"url"`
+				Title        string `json:"title"`
+			}
+			_ = json.Unmarshal(e.Payload, &p)
+			id := strings.TrimSpace(p.AttachmentID)
+			url := strings.TrimSpace(p.URL)
+			if id == "" || url == "" {
+				break
+			}
+			title := strings.TrimSpace(p.Title)
+			if title == "" {
+				title = url
+			}
+			replaced := false
+			for i := range it.Attachments {
+				if it.Attachments[i].ID == id {
+					it.Attachments[i].Title = title
+					it.Attachments[i].URL = url
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				it.Attachments = append(it.Attachments, issueAttachmentProjection{
+					ID:    id,
+					Title: title,
+					URL:   url,
+				})
+			}
+		case "issue.attachment.removed":
+			var p struct {
+				AttachmentID string `json:"attachment_id"`
+			}
+			_ = json.Unmarshal(e.Payload, &p)
+			id := strings.TrimSpace(p.AttachmentID)
+			if id == "" || len(it.Attachments) == 0 {
+				break
+			}
+			next := make([]issueAttachmentProjection, 0, len(it.Attachments))
+			for _, att := range it.Attachments {
+				if att.ID == id {
+					continue
+				}
+				next = append(next, att)
+			}
+			it.Attachments = next
 		}
 		issues[e.EntityID] = it
 	}
@@ -3326,6 +3532,27 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 		})
 	}
 	return out
+}
+
+func listIssueAttachments(log *store.EventLog, projectID, issueID string) ([]issueAttachmentProjection, error) {
+	all, err := log.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	board := projectBoardFromEvents(projectID, all)
+	for _, col := range board {
+		for _, it := range col {
+			if it.ID == issueID {
+				out := make([]issueAttachmentProjection, 0, len(it.Attachments))
+				out = append(out, it.Attachments...)
+				sort.Slice(out, func(i, j int) bool {
+					return out[i].ID < out[j].ID
+				})
+				return out, nil
+			}
+		}
+	}
+	return []issueAttachmentProjection{}, nil
 }
 
 func printBoardPlain(projectID string, board, boardAll map[string][]issueProjection, revision int, viewMode, assigneeID string) {

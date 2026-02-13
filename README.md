@@ -128,6 +128,16 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 # Master API (v1 namespace, совместим с текущими endpoint'ами)
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/team/list"
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/security/audit/export?all=1"
+
+# Attachments (MVP links): add/list/open/remove
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","url":"https://files.example.com/spec.pdf","title":"Spec PDF"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/add"
+curl -H "Authorization: Bearer <token>" \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/list?project_id=OPS&issue_id=OPS-101"
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"OPS-101-1739465000000000000"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/open"
 ```
 
 ### Документация
