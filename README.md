@@ -147,6 +147,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD parity interactive с protected policy flow: `docs/SDD-10-interactive-protected-policy-parity.md`
 - План SDD-10: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
 - Задачи SDD-10: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
+- SDD production deployment и onboarding реальных пользователей: `docs/SDD-11-production-deployment-and-real-user-onboarding.md`
+- План SDD-11: `docs/SDD-11-production-deployment-and-real-user-onboarding.plan.md`
+- Задачи SDD-11: `docs/SDD-11-production-deployment-and-real-user-onboarding.tasks.md`
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
@@ -159,6 +162,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - Реестр технического долга: `docs/TECH-DEBT.md`
 - Дорожная карта: `docs/ROADMAP.md`
 - Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
+- Runbook Ubuntu 24 + 3 VPS + real users: `docs/DEPLOYMENT-UBUNTU24-3VPS-REAL-USERS.md`
 - Скрипты деплоя: `deploy/README.md`
 
 ### Ближайший план
