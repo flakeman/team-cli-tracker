@@ -132,18 +132,18 @@ Track known technical debt, prioritize repayment, and define concrete exit crite
 3. Governance reconfiguration stress tests with no divergence.
 
 ### TD-014 Task lifecycle finalization (archive/delete policy)
-- Status: Open
+- Status: Closed
 - Impact: operators currently lack first-class archive/delete commands and retention semantics for issue lifecycle closure.
-- Current state: done-state + comment marker is used operationally; no canonical archive/unarchive API/CLI command set.
+- Current state: canonical archive lifecycle is implemented in CLI/API (`issue archive|unarchive`, `/api/v1/issue/archive`, `/api/v1/issue/unarchive`) and board rendering defaults to hiding archived tasks unless `--include-archived` is explicitly set.
 - Exit criteria:
 1. Archive/unarchive behavior is implemented and documented.
 2. Visibility/filtering rules for archived tasks are deterministic across board modes.
-3. Retention/delete policy is explicitly defined (soft/hard delete boundaries).
+3. Retention/delete policy is explicitly defined (soft/hard delete boundaries). Current policy: soft archive/unarchive only; hard delete is intentionally unsupported in runtime API.
 
 ### TD-015 Technical debt register synchronization discipline
-- Status: Open
+- Status: Closed
 - Impact: register can drift from implemented functionality, reducing planning accuracy.
-- Current state: major SDD-12 delivery landed before debt registry update.
+- Current state: PR template requires debt sync for architecture/security/state changes (`.github/pull_request_template.md`), and engineering process doc defines quarterly debt review and closure evidence requirements (`docs/ENGINEERING-PROCESS.md`).
 - Exit criteria:
 1. Debt register update is required in PR template for architecture-affecting changes.
 2. Each new SDD milestone maps to debt delta (opened/closed/updated items).

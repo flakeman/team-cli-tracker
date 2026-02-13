@@ -99,6 +99,10 @@ func runIssue(args []string) {
 		runIssueTransition(args[1:])
 	case "comment":
 		runIssueComment(args[1:])
+	case "archive":
+		runIssueArchive(args[1:])
+	case "unarchive":
+		runIssueUnarchive(args[1:])
 	default:
 		printIssueUsage()
 	}
@@ -186,6 +190,38 @@ func runIssueComment(args []string) {
 	fmt.Println("ok: issue comment event appended")
 }
 
+func runIssueArchive(args []string) {
+	fs := flag.NewFlagSet("issue archive", flag.ExitOnError)
+	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+	projectID := fs.String("project-id", "", "project id")
+	issueID := fs.String("issue-id", "", "issue id")
+	_ = fs.Parse(args)
+	if *projectID == "" || *issueID == "" {
+		fatal(fmt.Errorf("project-id and issue-id are required"))
+	}
+	if err := appendIssueEvent(*dataDir, *nodeID, *projectID, *issueID, "issue.archive", map[string]string{"archived": "true"}); err != nil {
+		fatal(err)
+	}
+	fmt.Println("ok: issue archived")
+}
+
+func runIssueUnarchive(args []string) {
+	fs := flag.NewFlagSet("issue unarchive", flag.ExitOnError)
+	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+	projectID := fs.String("project-id", "", "project id")
+	issueID := fs.String("issue-id", "", "issue id")
+	_ = fs.Parse(args)
+	if *projectID == "" || *issueID == "" {
+		fatal(fmt.Errorf("project-id and issue-id are required"))
+	}
+	if err := appendIssueEvent(*dataDir, *nodeID, *projectID, *issueID, "issue.unarchive", map[string]string{"archived": "false"}); err != nil {
+		fatal(err)
+	}
+	fmt.Println("ok: issue unarchived")
+}
+
 func runBoard(args []string) {
 	fs := flag.NewFlagSet("board", flag.ExitOnError)
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
@@ -195,6 +231,7 @@ func runBoard(args []string) {
 	view := fs.String("view", "all", "all|mine")
 	assigneeID := fs.String("assignee-id", envOr("BOARD_ASSIGNEE_ID", ""), "assignee id for mine view")
 	countsOnly := fs.Bool("counts-only", false, "print only column counts (plain mode)")
+	includeArchived := fs.Bool("include-archived", envOr("BOARD_INCLUDE_ARCHIVED", "false") == "true", "include archived issues in board output")
 	interactive := fs.Bool("interactive", false, "interactive board session with embedded commands (plain mode)")
 	interactiveRefresh := fs.Duration("interactive-refresh", mustDuration(envOr("BOARD_INTERACTIVE_REFRESH", "0s"), 0), "interactive auto-refresh interval; 0 disables periodic redraw")
 	interactivePolicyURL := fs.String("interactive-policy-url", envOr("BOARD_INTERACTIVE_POLICY_URL", envOr("POLICY_URL", "")), "policy endpoint base URL for interactive move validation")
@@ -251,6 +288,9 @@ func runBoard(args []string) {
 			return err
 		}
 		boardAll := projectBoardFromEvents(*projectID, all)
+		if !*includeArchived {
+			boardAll = filterBoardArchived(boardAll, false)
+		}
 		board := boardAll
 		mode := strings.ToLower(strings.TrimSpace(state.viewMode))
 		switch mode {
@@ -491,6 +531,16 @@ func applyBoardInteractiveCommand(raw string, in boardInteractiveInput) (bool, s
 			return false, err.Error()
 		}
 		return false, "moved " + cmd.args[0] + " " + cmd.args[1] + "->" + cmd.args[2]
+	case "archive":
+		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.archive", map[string]string{"archived": "true"}); err != nil {
+			return false, err.Error()
+		}
+		return false, "archived " + cmd.args[0]
+	case "unarchive":
+		if err := appendIssueEvent(in.dataDir, in.nodeID, in.projectID, cmd.args[0], "issue.unarchive", map[string]string{"archived": "false"}); err != nil {
+			return false, err.Error()
+		}
+		return false, "unarchived " + cmd.args[0]
 	case "comment":
 		if strings.TrimSpace(in.policyURL) != "" {
 			if err := requestIssueCommentProtected(in.policyURL, in.projectID, cmd.args[0], cmd.args[1]); err != nil {
@@ -519,6 +569,8 @@ func interactiveHelpText() string {
 		"    example: create OPS-901 Fix auth timeout",
 		"  move <ISSUE_ID> <from> <to>   - move issue across workflow",
 		"    example: move OPS-901 todo in_progress",
+		"  archive <ISSUE_ID>            - archive issue (hidden by default)",
+		"  unarchive <ISSUE_ID>          - restore archived issue",
 		"  comment <ISSUE_ID> <text>     - add comment to issue",
 		"    example: comment OPS-901 check logs on node-2",
 		"  view all                      - show all issues",
@@ -571,6 +623,11 @@ func parseBoardInteractiveCommand(raw string) (boardInteractiveCommand, error) {
 			return boardInteractiveCommand{}, fmt.Errorf("usage: move <ISSUE_ID> <from> <to>")
 		}
 		return boardInteractiveCommand{name: "move", args: []string{parts[1], parts[2], parts[3]}}, nil
+	case "archive", "unarchive":
+		if len(parts) != 2 {
+			return boardInteractiveCommand{}, fmt.Errorf("usage: %s <ISSUE_ID>", name)
+		}
+		return boardInteractiveCommand{name: name, args: []string{parts[1]}}, nil
 	case "comment":
 		x := strings.SplitN(line, " ", 3)
 		if len(x) < 3 || strings.TrimSpace(x[1]) == "" || strings.TrimSpace(x[2]) == "" {
@@ -1242,6 +1299,8 @@ func runServe(args []string) {
 	register("/issue/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
 	register("/issue/transition", s.withAuthRoles(s.issueTransition, "admin", "lead", "dev", "qa"))
 	register("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
+	register("/issue/archive", s.withAuthRoles(s.issueArchive, "admin", "lead", "dev", "qa"))
+	register("/issue/unarchive", s.withAuthRoles(s.issueUnarchive, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/initiate", s.withAuthRoles(s.issueAttachmentInitiate, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/complete", s.withAuthRoles(s.issueAttachmentComplete, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/add", s.withAuthRoles(s.issueAttachmentAdd, "admin", "lead", "dev", "qa"))
@@ -1386,6 +1445,11 @@ type issueTransitionRequest struct {
 	IssueID   string `json:"issue_id"`
 	From      string `json:"from"`
 	To        string `json:"to"`
+}
+
+type issueArchiveRequest struct {
+	ProjectID string `json:"project_id"`
+	IssueID   string `json:"issue_id"`
 }
 
 type issueAttachmentAddRequest struct {
@@ -2887,6 +2951,58 @@ func (s *syncServer) issueTransition(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "transitioned"})
 }
 
+func (s *syncServer) issueArchive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueArchiveRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	if in.ProjectID != s.projectID || in.IssueID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.archive", map[string]string{"archived": "true"}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "archived"})
+}
+
+func (s *syncServer) issueUnarchive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueArchiveRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	if in.ProjectID != s.projectID || in.IssueID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.unarchive", map[string]string{"archived": "false"}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "unarchived"})
+}
+
 func (s *syncServer) issueAttachmentInitiate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -3980,6 +4096,7 @@ func looksLikeIssueID(s string) bool {
 type issueProjection struct {
 	ID       string   `json:"id"`
 	Status   string   `json:"status"`
+	Archived bool     `json:"archived"`
 	Summary  string   `json:"summary"`
 	Priority string   `json:"priority"`
 	Assignee string   `json:"assignee"`
@@ -4068,6 +4185,10 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 			if strings.TrimSpace(p.To) != "" {
 				it.Status = p.To
 			}
+		case "issue.archive":
+			it.Archived = true
+		case "issue.unarchive":
+			it.Archived = false
 		case "issue.comment":
 			var p struct {
 				Text string `json:"text"`
@@ -4238,6 +4359,24 @@ func listAllIssueAttachments(log *store.EventLog, projectID, issueID string) ([]
 		return out[i].Attachment.ID < out[j].Attachment.ID
 	})
 	return out, nil
+}
+
+func filterBoardArchived(board map[string][]issueProjection, includeArchived bool) map[string][]issueProjection {
+	if includeArchived {
+		return board
+	}
+	out := make(map[string][]issueProjection, len(board))
+	for k, items := range board {
+		kept := make([]issueProjection, 0, len(items))
+		for _, it := range items {
+			if it.Archived {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		out[k] = kept
+	}
+	return out
 }
 
 func printBoardPlain(projectID string, board, boardAll map[string][]issueProjection, revision int, viewMode, assigneeID string) {
@@ -4411,6 +4550,8 @@ func printUsage() {
 	fmt.Println("  node issue create --project-id OPS --issue-id OPS-1 --summary \"...\" [--priority high] [--assignee user]")
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
+	fmt.Println("  node issue archive --project-id OPS --issue-id OPS-1")
+	fmt.Println("  node issue unarchive --project-id OPS --issue-id OPS-1")
 	fmt.Println("  node board --project-id OPS [--format plain|json] [--view all|mine] [--assignee-id u1] [--counts-only] [--interactive] [--interactive-policy-url http://127.0.0.1:4101] [--once] [--refresh 2s] [--peers http://127.0.0.1:4102]")
 	fmt.Println("  node storage migrate [--data-dir ./data]")
 	fmt.Println("  node storage enable-encryption [--data-dir ./data]")
@@ -4525,7 +4666,7 @@ func paginateAuditEvents(in []audit.Event, limit int, cursor string) ([]audit.Ev
 }
 
 func printIssueUsage() {
-	fmt.Println("issue commands: create | transition | comment")
+	fmt.Println("issue commands: create | transition | comment | archive | unarchive")
 }
 
 func envOr(k, fallback string) string {

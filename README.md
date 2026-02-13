@@ -71,6 +71,9 @@ go run ./cmd/node
 # отрисовать доску из API трекера
 go run ./cmd/node board --project-id OPS
 
+# включить архивные задачи в board output
+go run ./cmd/node board --project-id OPS --include-archived
+
 # отрисовать только свои задачи
 go run ./cmd/node board --project-id OPS --view mine --assignee-id vova
 
@@ -112,6 +115,10 @@ go run ./cmd/node team onboard --user-id dev1 --role dev
 go run ./cmd/node team role-change --user-id dev1 --role lead
 go run ./cmd/node team offboard --project-id OPS --user-id dev1
 
+# archive lifecycle
+go run ./cmd/node issue archive --project-id OPS --issue-id OPS-101
+go run ./cmd/node issue unarchive --project-id OPS --issue-id OPS-101
+
 # доверенные ноды
 go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
 go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
@@ -131,6 +138,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/security/a
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"project_id":"OPS","issue_id":"OPS-101","from":"todo","to":"in_progress"}' \
   "http://127.0.0.1:4101/api/v1/issue/transition"
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101"}' \
+  "http://127.0.0.1:4101/api/v1/issue/archive"
 
 # Attachments (MVP)
 # A) quick link-mode: add/list/open/remove
@@ -224,6 +234,7 @@ curl -H "Authorization: Bearer <token>" \
 - Release notes draft (`v0.8.0`): `docs/releases-v0.8.0.md`
 - Security runbook и incident checklist: `docs/SECURITY-RUNBOOK.md`
 - Реестр технического долга: `docs/TECH-DEBT.md`
+- Инженерный процесс и debt-review cadence: `docs/ENGINEERING-PROCESS.md`
 - Дорожная карта: `docs/ROADMAP.md`
 - Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Runbook Ubuntu 24 + 3 VPS + real users: `docs/DEPLOYMENT-UBUNTU24-3VPS-REAL-USERS.md`
