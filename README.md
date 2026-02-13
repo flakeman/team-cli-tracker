@@ -139,6 +139,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD интерактивного board-режима: `docs/SDD-08-board-interactive-and-operator-flow.md`
 - План SDD-08: `docs/SDD-08-board-interactive-and-operator-flow.plan.md`
 - Задачи SDD-08: `docs/SDD-08-board-interactive-and-operator-flow.tasks.md`
+- Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
@@ -299,6 +300,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - Board interactive mode SDD: `docs/SDD-08-board-interactive-and-operator-flow.md`
 - SDD-08 plan: `docs/SDD-08-board-interactive-and-operator-flow.plan.md`
 - SDD-08 tasks: `docs/SDD-08-board-interactive-and-operator-flow.tasks.md`
+- Interactive board smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Board live smoke (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
