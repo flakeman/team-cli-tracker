@@ -174,6 +174,13 @@ curl -H "Authorization: Bearer <token>" \
 #   --attachment-s3-secret-key minioadmin
 #   --attachment-s3-region us-east-1
 #   --attachment-s3-secure=false
+# optional periodic integrity scan:
+#   --attachment-verify-interval 1h
+# metrics fields:
+#   attachment_verify_last_at
+#   attachment_verify_checked
+#   attachment_verify_mismatch
+#   attachment_verify_errors
 ```
 
 ### Документация

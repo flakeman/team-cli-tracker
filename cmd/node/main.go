@@ -1077,6 +1077,7 @@ func runServe(args []string) {
 	attachmentS3AccessKey := fs.String("attachment-s3-access-key", envOr("ATTACHMENT_S3_ACCESS_KEY", ""), "S3 access key")
 	attachmentS3SecretKey := fs.String("attachment-s3-secret-key", envOr("ATTACHMENT_S3_SECRET_KEY", ""), "S3 secret key")
 	attachmentS3Secure := fs.Bool("attachment-s3-secure", envOr("ATTACHMENT_S3_SECURE", "false") == "true", "use HTTPS for S3 endpoint")
+	attachmentVerifyInterval := fs.Duration("attachment-verify-interval", mustDuration(envOr("ATTACHMENT_VERIFY_INTERVAL", "0s"), 0), "periodic attachment integrity verification interval; 0 disables")
 	_ = fs.Parse(args)
 
 	id, err := node.LoadOrCreate(*dataDir, *nodeID)
@@ -1285,6 +1286,9 @@ func runServe(args []string) {
 	register("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
 
 	go s.syncLoop(*tick)
+	if *attachmentVerifyInterval > 0 {
+		go s.attachmentVerifyLoop(*attachmentVerifyInterval)
+	}
 	fmt.Printf("node=%s listen=%s project=%s peers=%d\n", *nodeID, *listenAddr, *projectID, len(peers))
 	server := &http.Server{Addr: *listenAddr, Handler: mux, TLSConfig: serverTLS}
 	if strings.TrimSpace(*tlsCert) != "" && strings.TrimSpace(*tlsKey) != "" {
@@ -1340,6 +1344,10 @@ type syncServer struct {
 	attachmentBackend        string
 	attachmentS3Client       *minio.Client
 	attachmentS3Bucket       string
+	attachmentVerifyLastUnix atomic.Int64
+	attachmentVerifyChecked  atomic.Uint64
+	attachmentVerifyMismatch atomic.Uint64
+	attachmentVerifyErrors   atomic.Uint64
 }
 
 type peerSyncState struct {
@@ -3225,23 +3233,10 @@ func (s *syncServer) issueAttachmentVerifyAll(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid project_id"})
 		return
 	}
-	all, err := listAllIssueAttachments(s.log, projectID, issueID)
+	checked, mismatch, errorsCount, results, err := s.verifyAllAttachmentsDetailed(issueID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
-	}
-	results := make([]attachmentVerificationResult, 0, len(all))
-	mismatch := 0
-	errorsCount := 0
-	for _, item := range all {
-		res := s.verifyAttachmentProjection(item.IssueID, item.Attachment)
-		if !res.Match {
-			mismatch++
-		}
-		if strings.TrimSpace(res.Error) != "" {
-			errorsCount++
-		}
-		results = append(results, res)
 	}
 	if s.auditManager != nil {
 		status := "ok"
@@ -3251,7 +3246,7 @@ func (s *syncServer) issueAttachmentVerifyAll(w http.ResponseWriter, r *http.Req
 		s.auditManager.Append("attachment.verify_all", "api", status, map[string]any{
 			"project_id": projectID,
 			"issue_id":   issueID,
-			"checked":    len(results),
+			"checked":    checked,
 			"mismatch":   mismatch,
 			"errors":     errorsCount,
 			"backend":    s.attachmentBackend,
@@ -3260,7 +3255,7 @@ func (s *syncServer) issueAttachmentVerifyAll(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project_id": projectID,
 		"issue_id":   issueID,
-		"checked":    len(results),
+		"checked":    checked,
 		"mismatch":   mismatch,
 		"errors":     errorsCount,
 		"backend":    s.attachmentBackend,
@@ -3377,6 +3372,10 @@ func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 	if last > 0 {
 		lastSyncAt = time.Unix(last, 0).UTC().Format(time.RFC3339)
 	}
+	attachmentVerifyAt := ""
+	if v := s.attachmentVerifyLastUnix.Load(); v > 0 {
+		attachmentVerifyAt = time.Unix(v, 0).UTC().Format(time.RFC3339)
+	}
 	now := time.Now().UTC()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"node_id":                     s.nodeID,
@@ -3394,6 +3393,10 @@ func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 		"authn_denied_total":          s.authnDenied.Load(),
 		"authz_denied_total":          s.authzDenied.Load(),
 		"last_sync_at":                lastSyncAt,
+		"attachment_verify_last_at":   attachmentVerifyAt,
+		"attachment_verify_checked":   s.attachmentVerifyChecked.Load(),
+		"attachment_verify_mismatch":  s.attachmentVerifyMismatch.Load(),
+		"attachment_verify_errors":    s.attachmentVerifyErrors.Load(),
 	})
 }
 
@@ -3420,6 +3423,45 @@ func (s *syncServer) syncLoop(interval time.Duration) {
 		if s.discoveryEnabled {
 			s.refreshDiscoveredPeers(tickNow)
 			s.pruneDiscoveredPeers(tickNow)
+		}
+	}
+}
+
+func (s *syncServer) attachmentVerifyLoop(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		checked, mismatch, errorsCount, err := s.verifyAllAttachments("")
+		s.attachmentVerifyLastUnix.Store(time.Now().UTC().Unix())
+		if err != nil {
+			s.attachmentVerifyErrors.Add(1)
+			if s.auditManager != nil {
+				s.auditManager.Append("attachment.verify_all", "system", "error", map[string]any{
+					"project_id": s.projectID,
+					"error":      err.Error(),
+					"backend":    s.attachmentBackend,
+				})
+			}
+			continue
+		}
+		s.attachmentVerifyChecked.Store(uint64(checked))
+		s.attachmentVerifyMismatch.Store(uint64(mismatch))
+		s.attachmentVerifyErrors.Store(uint64(errorsCount))
+		status := "ok"
+		if mismatch > 0 || errorsCount > 0 {
+			status = "error"
+		}
+		if s.auditManager != nil {
+			s.auditManager.Append("attachment.verify_all", "system", status, map[string]any{
+				"project_id": s.projectID,
+				"checked":    checked,
+				"mismatch":   mismatch,
+				"errors":     errorsCount,
+				"backend":    s.attachmentBackend,
+			})
 		}
 	}
 }
@@ -4543,6 +4585,30 @@ func (s *syncServer) verifyAttachmentProjection(issueID string, att issueAttachm
 	res.ComputedSHA256 = computed
 	res.Match = (computed == stored)
 	return res
+}
+
+func (s *syncServer) verifyAllAttachments(issueID string) (checked, mismatch, errorsCount int, err error) {
+	checked, mismatch, errorsCount, _, err = s.verifyAllAttachmentsDetailed(issueID)
+	return
+}
+
+func (s *syncServer) verifyAllAttachmentsDetailed(issueID string) (checked, mismatch, errorsCount int, results []attachmentVerificationResult, err error) {
+	all, err := listAllIssueAttachments(s.log, s.projectID, strings.TrimSpace(issueID))
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	results = make([]attachmentVerificationResult, 0, len(all))
+	for _, item := range all {
+		res := s.verifyAttachmentProjection(item.IssueID, item.Attachment)
+		if !res.Match {
+			mismatch++
+		}
+		if strings.TrimSpace(res.Error) != "" {
+			errorsCount++
+		}
+		results = append(results, res)
+	}
+	return len(results), mismatch, errorsCount, results, nil
 }
 
 func (s *syncServer) signAttachmentToken(claims attachmentSignedToken) (string, error) {
