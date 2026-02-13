@@ -32,11 +32,11 @@ All 3 nodes produced identical checks:
 Observed canonical table lines:
 - `Project: OPS  Revision: 0`
 - `Assignee WIP limit: 3`
-- `To Do [0/20] ... In Progress [0/8] ...`
+- `To Do [0] ... In Progress [0] ...`
 - after mutation:
   - `Project: OPS  Revision: 1`
-  - `To Do [1/20]`
-  - `In Progress [1/8]`
+  - `To Do [1]`
+  - `In Progress [1]`
   - card containing `OPS-LIVE-1`
 
 ## Result

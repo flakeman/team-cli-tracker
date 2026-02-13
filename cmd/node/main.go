@@ -3134,13 +3134,12 @@ func renderBoardPlain(projectID string, board, boardAll map[string][]issueProjec
 	cols := []struct {
 		Key   string
 		Title string
-		Limit string
 	}{
-		{Key: "todo", Title: "To Do", Limit: "20"},
-		{Key: "in_progress", Title: "In Progress", Limit: "8"},
-		{Key: "code_review", Title: "Code Review", Limit: "6"},
-		{Key: "testing", Title: "Testing", Limit: "6"},
-		{Key: "done", Title: "Done", Limit: "inf"},
+		{Key: "todo", Title: "To Do"},
+		{Key: "in_progress", Title: "In Progress"},
+		{Key: "code_review", Title: "Code Review"},
+		{Key: "testing", Title: "Testing"},
+		{Key: "done", Title: "Done"},
 	}
 	totalIssues := 0
 	allTotal := 0
@@ -3169,7 +3168,7 @@ func renderBoardPlain(projectID string, board, boardAll map[string][]issueProjec
 	out.WriteString(sep + "\n")
 	headerCells := make([]string, 0, len(cols))
 	for _, c := range cols {
-		h := fmt.Sprintf("%s [%d/%s]", c.Title, len(board[c.Key]), c.Limit)
+		h := fmt.Sprintf("%s [%d]", c.Title, len(board[c.Key]))
 		headerCells = append(headerCells, padOrTrim(h, boardCellWidth))
 	}
 	fmt.Fprintf(&out, "|%s|\n", strings.Join(headerCells, "|"))
