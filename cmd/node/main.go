@@ -1246,6 +1246,7 @@ func runServe(args []string) {
 	register("/issue/attachment/remove", s.withAuthRoles(s.issueAttachmentRemove, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/list", s.withAuthRoles(s.issueAttachmentList, "admin", "lead", "dev", "qa", "viewer"))
 	register("/issue/attachment/open", s.withAuthRoles(s.issueAttachmentOpen, "admin", "lead", "dev", "qa", "viewer"))
+	register("/issue/attachment/verify", s.withAuthRoles(s.issueAttachmentVerify, "admin", "lead", "dev", "qa", "viewer"))
 	register("/attachments/upload", s.attachmentsUpload)
 	register("/attachments/download", s.attachmentsDownload)
 	register("/raft/vote-governance-reconfigure", s.withAuthRoles(s.raftVoteGovernanceReconfigure, "admin", "lead"))
@@ -1404,6 +1405,12 @@ type issueAttachmentOpenRequest struct {
 	ProjectID     string `json:"project_id"`
 	IssueID       string `json:"issue_id"`
 	AttachmentID  string `json:"attachment_id"`
+}
+
+type issueAttachmentVerifyRequest struct {
+	ProjectID    string `json:"project_id"`
+	IssueID      string `json:"issue_id"`
+	AttachmentID string `json:"attachment_id"`
 }
 
 type attachmentSignedToken struct {
@@ -3128,6 +3135,87 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
+}
+
+func (s *syncServer) issueAttachmentVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var in issueAttachmentVerifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	if in.ProjectID == "" {
+		in.ProjectID = s.projectID
+	}
+	in.IssueID = strings.TrimSpace(in.IssueID)
+	in.AttachmentID = strings.TrimSpace(in.AttachmentID)
+	if in.ProjectID != s.projectID || in.IssueID == "" || in.AttachmentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	items, err := listIssueAttachments(s.log, in.ProjectID, in.IssueID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var picked *issueAttachmentProjection
+	for i := range items {
+		if items[i].ID == in.AttachmentID {
+			picked = &items[i]
+			break
+		}
+	}
+	if picked == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "attachment not found"})
+		return
+	}
+	stored := strings.ToLower(strings.TrimSpace(picked.ChecksumSHA256))
+	if stored == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "checksum not set for attachment"})
+		return
+	}
+	var computed string
+	if strings.TrimSpace(picked.StorageKey) != "" {
+		if s.attachmentBackend == "s3" {
+			computed, err = s.s3ObjectSHA256(picked.StorageKey)
+		} else {
+			fullPath := filepath.Join(s.dataDir, "attachments", picked.StorageKey)
+			computed, err = fileSHA256Hex(fullPath)
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file not accessible"})
+			return
+		}
+	} else {
+		// URL-only mode: integrity is metadata-only, binary is external.
+		computed = stored
+	}
+	match := (computed == stored)
+	if s.auditManager != nil {
+		status := "ok"
+		if !match {
+			status = "error"
+		}
+		s.auditManager.Append("attachment.verify", "api", status, map[string]any{
+			"project_id":     in.ProjectID,
+			"issue_id":       in.IssueID,
+			"attachment_id":  in.AttachmentID,
+			"stored_sha256":  stored,
+			"computed_sha256": computed,
+			"backend":        s.attachmentBackend,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"attachment_id":   in.AttachmentID,
+		"match":           match,
+		"stored_sha256":   stored,
+		"computed_sha256": computed,
+		"backend":         s.attachmentBackend,
+	})
 }
 
 func (s *syncServer) attachmentsUpload(w http.ResponseWriter, r *http.Request) {

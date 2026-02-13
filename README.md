@@ -155,6 +155,11 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
   -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>","filename":"spec.pdf","content_type":"application/pdf","checksum_sha256":"<sha256>"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
 
+# verify attachment integrity (re-hash from storage and compare)
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/verify"
+
 # Attachment backend selection on server:
 # local (default): --attachment-backend local
 # s3/minio:
