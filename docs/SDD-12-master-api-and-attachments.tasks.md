@@ -8,5 +8,6 @@
 - [x] Реализовать attachment events (MVP links) и API add/list/open/remove.
 - [~] Реализовать storage adapter для бинарных файлов (MVP local object store; S3-compatible pending).
 - [x] Реализовать presigned upload/download lifecycle (MVP signed tokens).
+- [x] Добавить checksum validation (`sha256`) в attachment complete flow.
 - [ ] Добавить webhook события для вложений.
 - [ ] Добавить e2e smoke: 3 VPS + attachments + audit evidence.

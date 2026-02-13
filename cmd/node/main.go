@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -1335,6 +1336,7 @@ type issueAttachmentInitiateRequest struct {
 	ContentType string `json:"content_type"`
 	SizeBytes   int64  `json:"size_bytes"`
 	Title       string `json:"title"`
+	ChecksumSHA256 string `json:"checksum_sha256"`
 }
 
 type issueAttachmentCompleteRequest struct {
@@ -1345,6 +1347,7 @@ type issueAttachmentCompleteRequest struct {
 	ContentType  string `json:"content_type"`
 	SizeBytes    int64  `json:"size_bytes"`
 	Title        string `json:"title"`
+	ChecksumSHA256 string `json:"checksum_sha256"`
 }
 
 type issueAttachmentRemoveRequest struct {
@@ -2833,6 +2836,7 @@ func (s *syncServer) issueAttachmentComplete(w http.ResponseWriter, r *http.Requ
 	in.Filename = strings.TrimSpace(in.Filename)
 	in.ContentType = strings.TrimSpace(in.ContentType)
 	in.Title = strings.TrimSpace(in.Title)
+	in.ChecksumSHA256 = strings.ToLower(strings.TrimSpace(in.ChecksumSHA256))
 	if in.ProjectID != s.projectID || in.IssueID == "" || in.AttachmentID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
 		return
@@ -2853,6 +2857,16 @@ func (s *syncServer) issueAttachmentComplete(w http.ResponseWriter, r *http.Requ
 	if in.ContentType == "" {
 		in.ContentType = "application/octet-stream"
 	}
+	computedChecksum, err := fileSHA256Hex(fullPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if in.ChecksumSHA256 != "" && in.ChecksumSHA256 != computedChecksum {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "checksum mismatch"})
+		return
+	}
+	in.ChecksumSHA256 = computedChecksum
 	if err := appendIssueEventWithLog(s.log, s.identity, in.ProjectID, in.IssueID, "issue.attachment.added", map[string]any{
 		"attachment_id": in.AttachmentID,
 		"title":         in.Title,
@@ -2861,6 +2875,7 @@ func (s *syncServer) issueAttachmentComplete(w http.ResponseWriter, r *http.Requ
 		"filename":      in.Filename,
 		"content_type":  in.ContentType,
 		"size_bytes":    in.SizeBytes,
+		"checksum_sha256": in.ChecksumSHA256,
 	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -3000,10 +3015,11 @@ func (s *syncServer) issueAttachmentOpen(w http.ResponseWriter, r *http.Request)
 					"title":         it.Title,
 					"url":           base + "/api/v1/attachments/download?token=" + url.QueryEscape(token),
 					"expires_in_sec": 300,
+					"checksum_sha256": it.ChecksumSHA256,
 				})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"attachment_id": it.ID, "title": it.Title, "url": it.URL})
+			writeJSON(w, http.StatusOK, map[string]any{"attachment_id": it.ID, "title": it.Title, "url": it.URL, "checksum_sha256": it.ChecksumSHA256})
 			return
 		}
 	}
@@ -3629,6 +3645,7 @@ type issueAttachmentProjection struct {
 	Filename    string `json:"filename,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
 }
 
 func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[string][]issueProjection {
@@ -3728,6 +3745,7 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 				Filename     string `json:"filename"`
 				ContentType  string `json:"content_type"`
 				SizeBytes    int64  `json:"size_bytes"`
+				ChecksumSHA256 string `json:"checksum_sha256"`
 			}
 			_ = json.Unmarshal(e.Payload, &p)
 			id := strings.TrimSpace(p.AttachmentID)
@@ -3753,6 +3771,7 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 					it.Attachments[i].Filename = strings.TrimSpace(p.Filename)
 					it.Attachments[i].ContentType = strings.TrimSpace(p.ContentType)
 					it.Attachments[i].SizeBytes = p.SizeBytes
+					it.Attachments[i].ChecksumSHA256 = strings.ToLower(strings.TrimSpace(p.ChecksumSHA256))
 					replaced = true
 					break
 				}
@@ -3766,6 +3785,7 @@ func projectBoardFromEvents(projectID string, all []events.SignedEvent) map[stri
 					Filename:    strings.TrimSpace(p.Filename),
 					ContentType: strings.TrimSpace(p.ContentType),
 					SizeBytes:   p.SizeBytes,
+					ChecksumSHA256: strings.ToLower(strings.TrimSpace(p.ChecksumSHA256)),
 				})
 			}
 		case "issue.attachment.removed":
@@ -4175,6 +4195,19 @@ func requestBaseURL(r *http.Request) string {
 
 func attachmentStorageKey(projectID, issueID, attachmentID string) string {
 	return filepath.Join(strings.TrimSpace(projectID), strings.TrimSpace(issueID), strings.TrimSpace(attachmentID)+".bin")
+}
+
+func fileSHA256Hex(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (s *syncServer) signAttachmentToken(claims attachmentSignedToken) (string, error) {

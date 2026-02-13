@@ -148,8 +148,11 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 
 curl -X PUT --data-binary @./spec.pdf "<upload_url_from_initiate>"
 
+# checksum (linux/mac):
+# SHA=$(sha256sum ./spec.pdf | awk '{print $1}')
+
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-  -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>","filename":"spec.pdf","content_type":"application/pdf"}' \
+  -d '{"project_id":"OPS","issue_id":"OPS-101","attachment_id":"<attachment_id>","filename":"spec.pdf","content_type":"application/pdf","checksum_sha256":"<sha256>"}' \
   "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
 ```
 
