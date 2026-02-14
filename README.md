@@ -28,6 +28,11 @@
 - Определены SDD и roadmap.
 - Следующая веха: первый синхронизируемый кластер из 3 нод.
 
+### SSH Topology (3 VPS)
+- `srv1-22221 = srv1.abuztech.ru:22` (legacy alias: `test.abuztech.ru:22221`)
+- `srv2-22222 = srv2.abuztech.ru:22` (legacy alias: `test.abuztech.ru:22222`)
+- `srv3-22223 = srv3.abuztech.ru:22` (legacy alias: `test.abuztech.ru:22223`)
+
 ### Быстрый старт (локально)
 ```bash
 go test ./...
