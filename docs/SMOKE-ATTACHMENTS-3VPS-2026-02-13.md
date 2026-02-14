@@ -8,7 +8,11 @@
   - API namespace parity (`/api/v1/*`)
 
 ## Preconditions
-- 3-node cluster topology is active (`22221`, `22222`, `22223`) for project `OPS`.
+- 3-node cluster topology is active:
+  - `srv1.abuztech.ru:22` (`srv1-22221`)
+  - `srv2.abuztech.ru:22` (`srv2-22222`)
+  - `srv3.abuztech.ru:22` (`srv3-22223`)
+  for project `OPS`.
 - Secure auth token used for protected API routes.
 - Attachment backend tested in both modes:
   - `local` (default),

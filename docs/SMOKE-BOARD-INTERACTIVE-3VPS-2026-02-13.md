@@ -4,8 +4,10 @@
 Validate interactive board operator flow (`node board --interactive`) on 3 VPS.
 
 ## Environment
-- Host: `test.abuztech.ru`
-- Nodes (SSH ports): `22221`, `22222`, `22223`
+- Nodes:
+  - `srv1.abuztech.ru:22` (`srv1-22221`)
+  - `srv2.abuztech.ru:22` (`srv2-22222`)
+  - `srv3.abuztech.ru:22` (`srv3-22223`)
 - OS: Ubuntu 24
 - Binary: current `main` linux/amd64 build with interactive mode.
 
@@ -34,4 +36,4 @@ All 3 nodes passed:
 - `has_table=true`
 
 ## Result
-`PASS` on `22221`, `22222`, `22223`. Interactive board accepts embedded commands and updates state/status without requiring a second terminal for command execution.
+`PASS` on `srv1-22221`, `srv2-22222`, `srv3-22223`. Interactive board accepts embedded commands and updates state/status without requiring a second terminal for command execution.

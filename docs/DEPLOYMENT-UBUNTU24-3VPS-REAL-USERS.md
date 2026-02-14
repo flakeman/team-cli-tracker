@@ -13,6 +13,10 @@
 
 ## 1) Предпосылки
 - Ubuntu 24 на 3 VPS.
+- SSH endpoints:
+  - `srv1-22221 = srv1.abuztech.ru:22`
+  - `srv2-22222 = srv2.abuztech.ru:22`
+  - `srv3-22223 = srv3.abuztech.ru:22`
 - Открыты сетевые порты для node API/peer communication.
 - Работает issuer/policy endpoint для authn/authz.
 - Локальная машина с Go для сборки бинарника.
@@ -25,11 +29,11 @@ GOOS=linux GOARCH=amd64 go build -o node ./cmd/node
 ```
 
 ## 3) Доставка бинарника на все VPS
-Пример для вашего хоста и портов:
+Пример для текущих хостов:
 ```bash
-scp -P 22221 ./node vova@test.abuztech.ru:/home/vova/tct/node
-scp -P 22222 ./node vova@test.abuztech.ru:/home/vova/tct/node
-scp -P 22223 ./node vova@test.abuztech.ru:/home/vova/tct/node
+scp ./node vova@srv1.abuztech.ru:/home/vova/tct/node
+scp ./node vova@srv2.abuztech.ru:/home/vova/tct/node
+scp ./node vova@srv3.abuztech.ru:/home/vova/tct/node
 ```
 
 На каждом VPS:

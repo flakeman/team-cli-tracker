@@ -1,11 +1,10 @@
 # Smoke Execution Report (`main`) - 2026-02-12 UTC
 
 ## Environment
-- Host: `test.abuztech.ru`
-- SSH ports / nodes:
-  - node-1: `22221`
-  - node-2: `22222`
-  - node-3: `22223`
+- Hosts / nodes:
+  - node-1: `srv1.abuztech.ru:22` (`srv1-22221`)
+  - node-2: `srv2.abuztech.ru:22` (`srv2-22222`)
+  - node-3: `srv3.abuztech.ru:22` (`srv3-22223`)
 - OS: Ubuntu 24
 - Binary: linux amd64 build from current `main`
 

@@ -4,15 +4,17 @@
 Run extended operational validation on 3 VPS:
 1. Batch workload of 36 issues (12 per node) with transitions/comments.
 2. Command suite coverage for board/auth/team/trust/storage/audit/API.
-3. Live operator observation path via `screen` on node `22223`.
+3. Live operator observation path via `screen` on node `srv3-22223`.
 
 ## Environment
-- Host: `test.abuztech.ru`
-- Nodes: `22221`, `22222`, `22223`
+- Nodes:
+  - `srv1.abuztech.ru:22` (`srv1-22221`)
+  - `srv2.abuztech.ru:22` (`srv2-22222`)
+  - `srv3.abuztech.ru:22` (`srv3-22223`)
 - Binary: current `main` linux/amd64 build (`./node` in `~/team-cli-live`)
 
 ## Batch Workload
-Per node (`22221/22222/22223`) executed:
+Per node (`srv1-22221`/`srv2-22222`/`srv3-22223`) executed:
 - `12` issue creates
 - `20` transitions
 - `12` comments
@@ -34,7 +36,7 @@ After batch on each node:
   - `Displayed issues`
   - `All issues`
 
-## Command Suite Coverage (22223)
+## Command Suite Coverage (srv3-22223)
 Validated successfully:
 - `board`: `--once`, `--counts-only`, `--view mine`, `--interactive`
 - `auth`: `issue`, `list`, `bind-role`, `list-bindings`, `revoke`
@@ -54,7 +56,7 @@ Validated successfully:
 Result: `PASS` (no blocking errors in suite execution).
 
 ## Observation Mode
-Interactive board process available on `22223` in screen session:
+Interactive board process available on `srv3-22223` in screen session:
 - `tct_board_int`
 - attach with:
   - `screen -r tct_board_int`
