@@ -19,10 +19,11 @@
 
 ### Типовой порядок
 1. Скопировать `cluster.env.example` в `cluster.env` и заполнить значения.
-2. Запустить `bootstrap-debian13.sh` на каждой VPS.
-3. Запустить `gen-node-config.sh` на каждой VPS с параметрами своей ноды.
-4. Запустить `install-systemd-service.sh` на каждой VPS.
-5. Проверить статус сервиса и логи.
+2. При наличии внутреннего DNS указать `INTERNAL_DNS` (по умолчанию `172.16.254.254`).
+3. Запустить `bootstrap-debian13.sh` на каждой VPS.
+4. Запустить `gen-node-config.sh` на каждой VPS с параметрами своей ноды.
+5. Запустить `install-systemd-service.sh` на каждой VPS.
+6. Проверить статус сервиса и логи.
 
 ---
 
@@ -45,7 +46,8 @@ This folder contains helper scripts for an Ubuntu 24 / Debian 13 `team-cli-track
 
 ### Typical Flow
 1. Copy `cluster.env.example` to `cluster.env` and fill values.
-2. Run `bootstrap-debian13.sh` on each VPS.
-3. Run `gen-node-config.sh` on each VPS with node-specific IDs/ports/peers.
-4. Run `install-systemd-service.sh` on each VPS.
-5. Validate service and logs.
+2. Set `INTERNAL_DNS` for private resolver (default `172.16.254.254`) if required.
+3. Run `bootstrap-debian13.sh` on each VPS.
+4. Run `gen-node-config.sh` on each VPS with node-specific IDs/ports/peers.
+5. Run `install-systemd-service.sh` on each VPS.
+6. Validate service and logs.

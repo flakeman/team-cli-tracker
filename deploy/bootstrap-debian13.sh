@@ -25,6 +25,17 @@ apt -y install git curl ca-certificates ufw fail2ban tar
 
 timedatectl set-timezone UTC || true
 
+# Optional internal DNS for private zone resolution.
+if [[ -n "${INTERNAL_DNS:-}" ]]; then
+  if command -v resolvectl >/dev/null 2>&1; then
+    default_if="$(ip route | awk '/default/ {print $5; exit}')"
+    if [[ -n "${default_if:-}" ]]; then
+      resolvectl dns "$default_if" "$INTERNAL_DNS" || true
+      resolvectl domain "$default_if" "~." || true
+    fi
+  fi
+fi
+
 if ! id "$APP_USER" >/dev/null 2>&1; then
   useradd --system --create-home --shell /bin/bash "$APP_USER"
 fi
@@ -63,4 +74,3 @@ echo "repo: $REPO_DIR"
 echo "next:"
 echo "  sudo -u $APP_USER bash $REPO_DIR/deploy/gen-node-config.sh $REPO_DIR/deploy/cluster.env"
 echo "  sudo bash $REPO_DIR/deploy/install-systemd-service.sh $REPO_DIR/deploy/cluster.env"
-
