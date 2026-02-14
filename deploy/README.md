@@ -2,13 +2,13 @@
 
 ## RU
 
-Эта папка содержит вспомогательные скрипты для тестового кластера `team-cli-tracker` на Debian 13.
+Эта папка содержит вспомогательные скрипты для тестового кластера `team-cli-tracker` на Ubuntu 24 / Debian 13.
 
 ### Файлы
 - `cluster.env.example` - общий шаблон переменных.
-- `cluster.node-1.env.example` - готовый шаблон для node-1.
-- `cluster.node-2.env.example` - готовый шаблон для node-2.
-- `cluster.node-3.env.example` - готовый шаблон для node-3.
+- `cluster.node-1.env.example` - готовый шаблон для `srv1` (node-1).
+- `cluster.node-2.env.example` - готовый шаблон для `srv2` (node-2).
+- `cluster.node-3.env.example` - готовый шаблон для `srv3` (node-3).
 - `cluster.node-4.env.example` - готовый шаблон для node-4 (режим 5 нод).
 - `cluster.node-5.env.example` - готовый шаблон для node-5 (режим 5 нод).
 - `bootstrap-debian13.sh` - базовая подготовка ОС + установка Go + clone/update репозитория.
@@ -28,13 +28,13 @@
 
 ## EN
 
-This folder contains helper scripts for a Debian 13 `team-cli-tracker` test cluster.
+This folder contains helper scripts for an Ubuntu 24 / Debian 13 `team-cli-tracker` test cluster.
 
 ### Files
 - `cluster.env.example` - common variables template.
-- `cluster.node-1.env.example` - ready config template for node-1.
-- `cluster.node-2.env.example` - ready config template for node-2.
-- `cluster.node-3.env.example` - ready config template for node-3.
+- `cluster.node-1.env.example` - ready config template for `srv1` (node-1).
+- `cluster.node-2.env.example` - ready config template for `srv2` (node-2).
+- `cluster.node-3.env.example` - ready config template for `srv3` (node-3).
 - `cluster.node-4.env.example` - ready config template for node-4 (5-node mode).
 - `cluster.node-5.env.example` - ready config template for node-5 (5-node mode).
 - `bootstrap-debian13.sh` - base OS setup + Go install + repo clone/update.

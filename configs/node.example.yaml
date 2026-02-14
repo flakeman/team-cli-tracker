@@ -1,6 +1,6 @@
 ﻿# Node config example
-node_id: node-1
+node_id: srv1
 listen_addr: "/ip4/0.0.0.0/tcp/4101"
 project_peers:
-  - node-2
-  - node-3
+  - srv2
+  - srv3
