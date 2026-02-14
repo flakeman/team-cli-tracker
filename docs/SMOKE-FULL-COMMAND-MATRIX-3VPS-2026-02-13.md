@@ -8,10 +8,10 @@
 - Board rendering checks (`once`, `counts`, `include-archived`).
 
 ## Environment
-- Main execution node: `srv1.abuztech.ru:22` (`srv1-22221`)
+- Main execution node: `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
 - Observer nodes:
-  - `srv2.abuztech.ru:22` (`srv2-22222`)
-  - `srv3.abuztech.ru:22` (`srv3-22223`)
+  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
+  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
 - Test API port: `:4111`
 - Binary: freshly built from current `main` (`node-linux-fulltest` uploaded to `srv1.abuztech.ru`).
 

@@ -14,9 +14,9 @@
 ## 1) Предпосылки
 - Ubuntu 24 на 3 VPS.
 - SSH endpoints:
-  - `srv1-22221 = srv1.abuztech.ru:22`
-  - `srv2-22222 = srv2.abuztech.ru:22`
-  - `srv3-22223 = srv3.abuztech.ru:22`
+  - `srv1-22221 = srv1.abuztech.ru` (SSH port `22`)
+  - `srv2-22222 = srv2.abuztech.ru` (SSH port `22`)
+  - `srv3-22223 = srv3.abuztech.ru` (SSH port `22`)
 - Открыты сетевые порты для node API/peer communication.
 - Работает issuer/policy endpoint для authn/authz.
 - Локальная машина с Go для сборки бинарника.

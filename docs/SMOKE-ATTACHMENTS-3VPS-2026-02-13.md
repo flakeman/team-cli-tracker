@@ -9,9 +9,9 @@
 
 ## Preconditions
 - 3-node cluster topology is active:
-  - `srv1.abuztech.ru:22` (`srv1-22221`)
-  - `srv2.abuztech.ru:22` (`srv2-22222`)
-  - `srv3.abuztech.ru:22` (`srv3-22223`)
+  - `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
+  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
+  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
   for project `OPS`.
 - Secure auth token used for protected API routes.
 - Attachment backend tested in both modes:

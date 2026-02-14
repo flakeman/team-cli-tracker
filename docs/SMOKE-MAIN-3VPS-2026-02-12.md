@@ -2,9 +2,9 @@
 
 ## Environment
 - Hosts / nodes:
-  - node-1: `srv1.abuztech.ru:22` (`srv1-22221`)
-  - node-2: `srv2.abuztech.ru:22` (`srv2-22222`)
-  - node-3: `srv3.abuztech.ru:22` (`srv3-22223`)
+  - node-1: `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
+  - node-2: `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
+  - node-3: `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
 - OS: Ubuntu 24
 - Binary: linux amd64 build from current `main`
 

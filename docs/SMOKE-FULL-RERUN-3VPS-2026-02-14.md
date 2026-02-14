@@ -10,10 +10,10 @@ Repeat full end-to-end validation from scratch:
 - cross-node observer checks.
 
 ## Execution Topology
-- Primary execution node: `srv1.abuztech.ru:22` (`srv1-22221`) (fresh binary + fresh data-dir)
+- Primary execution node: `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`) (fresh binary + fresh data-dir)
 - Observer nodes:
-  - `srv2.abuztech.ru:22` (`srv2-22222`)
-  - `srv3.abuztech.ru:22` (`srv3-22223`)
+  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
+  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
 - API test port on primary: `:4111`
 
 ## Matrix Result (Primary Node)

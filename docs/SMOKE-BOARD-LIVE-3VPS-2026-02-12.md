@@ -5,9 +5,9 @@ Validate active board updates in live mode (`node board --refresh 1s`) on 3 VPS.
 
 ## Environment
 - Nodes:
-  - `srv1.abuztech.ru:22` (`srv1-22221`)
-  - `srv2.abuztech.ru:22` (`srv2-22222`)
-  - `srv3.abuztech.ru:22` (`srv3-22223`)
+  - `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
+  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
+  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
 - OS: Ubuntu 24
 - Build: `main` commit `8fd7613` (`linux/amd64`)
 
