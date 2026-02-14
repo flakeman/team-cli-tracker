@@ -74,7 +74,7 @@ func main() {
 
 func runIdentity(args []string) {
 	fs := flag.NewFlagSet("identity", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	_ = fs.Parse(args)
 
@@ -110,7 +110,7 @@ func runIssue(args []string) {
 
 func runIssueCreate(args []string) {
 	fs := flag.NewFlagSet("issue create", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	issueID := fs.String("issue-id", "", "issue id")
@@ -144,7 +144,7 @@ func runIssueCreate(args []string) {
 
 func runIssueTransition(args []string) {
 	fs := flag.NewFlagSet("issue transition", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	issueID := fs.String("issue-id", "", "issue id")
@@ -171,7 +171,7 @@ func runIssueTransition(args []string) {
 
 func runIssueComment(args []string) {
 	fs := flag.NewFlagSet("issue comment", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	issueID := fs.String("issue-id", "", "issue id")
@@ -192,7 +192,7 @@ func runIssueComment(args []string) {
 
 func runIssueArchive(args []string) {
 	fs := flag.NewFlagSet("issue archive", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	issueID := fs.String("issue-id", "", "issue id")
@@ -208,7 +208,7 @@ func runIssueArchive(args []string) {
 
 func runIssueUnarchive(args []string) {
 	fs := flag.NewFlagSet("issue unarchive", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
 	issueID := fs.String("issue-id", "", "issue id")
@@ -226,7 +226,7 @@ func runBoard(args []string) {
 	fs := flag.NewFlagSet("board", flag.ExitOnError)
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", "", "project id")
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier (interactive commands)")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier (interactive commands)")
 	format := fs.String("format", "plain", "plain|json")
 	view := fs.String("view", "all", "all|mine")
 	assigneeID := fs.String("assignee-id", envOr("BOARD_ASSIGNEE_ID", ""), "assignee id for mine view")
@@ -887,7 +887,7 @@ func runTeam(args []string) {
 		fs := flag.NewFlagSet("team offboard", flag.ExitOnError)
 		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 		projectID := fs.String("project-id", "", "project id")
-		nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+		nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 		userID := fs.String("user-id", "", "user id")
 		_ = fs.Parse(args[1:])
 		if *projectID == "" || *userID == "" {
@@ -1101,7 +1101,7 @@ func runAudit(args []string) {
 
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	nodeID := fs.String("node-id", envOr("NODE_ID", "node-1"), "node identifier")
+	nodeID := fs.String("node-id", envOr("NODE_ID", "srv1"), "node identifier")
 	dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
 	projectID := fs.String("project-id", envOr("PROJECT_ID", "OPS"), "project id")
 	listenAddr := fs.String("listen", envOr("LISTEN_ADDR", ":4101"), "http listen address")
