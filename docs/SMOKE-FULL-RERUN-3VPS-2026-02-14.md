@@ -10,8 +10,10 @@ Repeat full end-to-end validation from scratch:
 - cross-node observer checks.
 
 ## Execution Topology
-- Primary execution node: `test.abuztech.ru:22221` (fresh binary + fresh data-dir)
-- Observer nodes: `test.abuztech.ru:22222`, `test.abuztech.ru:22223`
+- Primary execution node: `srv1.abuztech.ru:22` (`srv1-22221`) (fresh binary + fresh data-dir)
+- Observer nodes:
+  - `srv2.abuztech.ru:22` (`srv2-22222`)
+  - `srv3.abuztech.ru:22` (`srv3-22223`)
 - API test port on primary: `:4111`
 
 ## Matrix Result (Primary Node)
@@ -50,9 +52,9 @@ All checks passed with expected status codes.
 Conclusion (primary): `PASS`.
 
 ## Observer Nodes Check
-From `22222` and `22223` to `test.abuztech.ru:4111`:
+From `srv2-22222` and `srv3-22223` to `http://srv1.abuztech.ru:4111`:
 - `curl /healthz` -> `000` + `connection refused`
-- `board --peers http://test.abuztech.ru:4111` -> sync clock error + empty board
+- `board --peers http://srv1.abuztech.ru:4111` -> sync clock error + empty board
 
 Conclusion (cross-node): `BLOCKED` by inter-node network reachability on `4111/tcp`.
 
