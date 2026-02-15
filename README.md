@@ -238,6 +238,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - Smoke attachments + webhooks (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-ATTACHMENTS-3VPS-2026-02-13.md`
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
+- Smoke master API (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-MASTER-API-3VPS-2026-02-15.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
