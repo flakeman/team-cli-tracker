@@ -607,6 +607,53 @@ func TestParseBoardInteractiveCommand(t *testing.T) {
 	}
 }
 
+func TestApplyBoardInteractiveCommandCreateAutoIDMultiple(t *testing.T) {
+	dataDir := t.TempDir()
+	projectID := "OPS"
+	nodeID := "srv1"
+	state := &boardRenderState{viewMode: "all"}
+	in := boardInteractiveInput{
+		dataDir:    dataDir,
+		projectID:  projectID,
+		nodeID:     nodeID,
+		state:      state,
+		policyURL:  "",
+	}
+
+	for _, raw := range []string{"create First issue", "create Second issue", "create Third issue"} {
+		quit, msg := applyBoardInteractiveCommand(raw, in)
+		if quit {
+			t.Fatalf("unexpected quit for %q", raw)
+		}
+		if !strings.Contains(msg, "created OPS-") {
+			t.Fatalf("expected created message for %q, got %q", raw, msg)
+		}
+	}
+
+	logDB, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	all, err := logDB.ReadAll()
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+	board := projectBoardFromEvents(projectID, all)
+	if got := len(board["todo"]); got != 3 {
+		t.Fatalf("unexpected todo count: got=%d want=3", got)
+	}
+
+	seen := map[string]bool{}
+	for _, it := range board["todo"] {
+		seen[it.ID] = true
+	}
+	for _, id := range []string{"OPS-1", "OPS-2", "OPS-3"} {
+		if !seen[id] {
+			t.Fatalf("missing issue id %s in todo column", id)
+		}
+	}
+}
+
 func TestInteractiveHelpTextHasExamples(t *testing.T) {
 	help := interactiveHelpText()
 	required := []string{
