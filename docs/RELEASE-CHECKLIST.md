@@ -7,7 +7,7 @@ Owner: vova
 ## 1) Network
 - [x] Inter-node `4101/tcp` is reachable both directions: `srv1 <-> srv2 <-> srv3`.
 - [ ] Public/consumer entrypoint is defined (`board DNS` or local-only mode). (pending decision)
-- [ ] Single entrypoint failover is configured (LB or VRRP VIP or DNS health-check).
+- [x] Single entrypoint failover is configured (LB or VRRP VIP or DNS health-check).
 - [~] SSH keys are configured; password SSH is disabled or restricted. (keys configured between nodes, password access still enabled)
 
 ## 2) Runtime
@@ -33,7 +33,7 @@ Owner: vova
 
 ## 5) Attachments
 - [x] Attachment backend is selected (`local` or `s3`) and documented. (prod baseline: `s3`, dev fallback: `local`)
-- [ ] Distributed MinIO (`x3`) is deployed and healthy.
+- [x] Distributed MinIO (`x3`) is deployed and healthy.
 - [ ] `s3.internal` endpoint is stable via selected HA profile.
 - [x] `initiate -> upload -> complete -> verify` flow passes.
 - [x] `verify-all` passes for current project.

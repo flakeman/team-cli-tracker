@@ -10,5 +10,5 @@
 - [x] T13-008 Update isolated deployment runbook for WG + gateway + MinIO + VIP.
 - [x] T13-009 Update release checklist with failover and S3 gates.
 - [x] T13-010 Update changelog with SDD-13 baseline deliverables.
-- [ ] T13-011 Execute 3-node end-to-end isolated smoke with keepalived VIP and MinIO.
-- [ ] T13-012 Attach smoke evidence and mark release GO/NO-GO based on gates.
+- [x] T13-011 Execute 3-node end-to-end isolated smoke with keepalived VIP and MinIO.
+- [x] T13-012 Attach smoke evidence and mark release GO/NO-GO based on gates.
