@@ -259,6 +259,12 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - Release notes draft (`v0.8.0`): `docs/releases-v0.8.0.md`
 - Operations backup/restore/rotation: `docs/OPERATIONS-BACKUP-RESTORE-AND-ROTATION.md`
 - Rollback runbook: `docs/ROLLBACK-RUNBOOK.md`
+
+### Community
+- License: `LICENSE`
+- Contributing guide: `CONTRIBUTING.md`
+- Code of Conduct: `CODE_OF_CONDUCT.md`
+- Security policy: `SECURITY.md`
 - Security runbook и incident checklist: `docs/SECURITY-RUNBOOK.md`
 - Реестр технического долга: `docs/TECH-DEBT.md`
 - Инженерный процесс и debt-review cadence: `docs/ENGINEERING-PROCESS.md`
