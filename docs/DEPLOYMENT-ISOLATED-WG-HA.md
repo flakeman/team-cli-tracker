@@ -116,6 +116,8 @@ Quick setup (each node):
      - `KA_VRID=51`
      - `KA_AUTH_PASS=<shared-pass>`
      - `KA_VIP=10.20.0.10/24`
+     - `KA_UNICAST_SRC_IP=<node wg ip>`
+     - `KA_UNICAST_PEERS=<comma-separated other wg ips>`
 3. Install:
 ```bash
 sudo bash deploy/install-keepalived.sh deploy/keepalived.env

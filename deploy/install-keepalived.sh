@@ -27,6 +27,8 @@ KA_STATE="${KA_STATE:-BACKUP}"
 KA_CHECK_HOST="${KA_CHECK_HOST:-127.0.0.1}"
 KA_CHECK_PORT="${KA_CHECK_PORT:-8080}"
 KA_CHECK_PATH="${KA_CHECK_PATH:-/api/v1/healthz}"
+KA_UNICAST_SRC_IP="${KA_UNICAST_SRC_IP:-}"
+KA_UNICAST_PEERS="${KA_UNICAST_PEERS:-}"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
@@ -40,6 +42,23 @@ set -e
 curl -fsS --max-time 2 "http://${KA_CHECK_HOST}:${KA_CHECK_PORT}${KA_CHECK_PATH}" >/dev/null
 EOF
 chmod +x /etc/keepalived/check_board_gateway.sh
+
+unicast_block=""
+if [[ -n "${KA_UNICAST_SRC_IP}" ]] && [[ -n "${KA_UNICAST_PEERS}" ]]; then
+  IFS=',' read -r -a peers <<< "${KA_UNICAST_PEERS}"
+  peer_lines=""
+  for p in "${peers[@]}"; do
+    x="$(echo "$p" | xargs)"
+    [[ -z "$x" ]] && continue
+    peer_lines="${peer_lines}    ${x}\n"
+  done
+  if [[ -n "${peer_lines}" ]]; then
+    unicast_block="  unicast_src_ip ${KA_UNICAST_SRC_IP}
+  unicast_peer {
+${peer_lines%\\n}
+  }"
+  fi
+fi
 
 cat >/etc/keepalived/keepalived.conf <<EOF
 global_defs {
@@ -61,6 +80,8 @@ vrrp_instance VI_${KA_VRID} {
   virtual_router_id ${KA_VRID}
   priority ${KA_PRIORITY}
   advert_int 1
+
+${unicast_block}
 
   authentication {
     auth_type PASS

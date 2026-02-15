@@ -22,7 +22,19 @@ MINIO_BUCKET="${MINIO_BUCKET:-team-cli-attachments}"
 alias_name="localminio"
 endpoint="http://${MINIO_BIND_ADDRESS}:${MINIO_API_PORT}"
 
-/usr/local/bin/mc alias set "${alias_name}" "${endpoint}" "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"
+# Cluster init can take some time after minio service restart.
+max_tries=30
+for i in $(seq 1 "${max_tries}"); do
+  if /usr/local/bin/mc alias set "${alias_name}" "${endpoint}" "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1; then
+    break
+  fi
+  if [[ "${i}" -eq "${max_tries}" ]]; then
+    echo "failed to init minio alias after ${max_tries} attempts: ${endpoint}"
+    exit 1
+  fi
+  sleep 2
+done
+
 /usr/local/bin/mc mb --ignore-existing "${alias_name}/${MINIO_BUCKET}"
 /usr/local/bin/mc anonymous set private "${alias_name}/${MINIO_BUCKET}"
 
