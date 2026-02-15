@@ -43,7 +43,7 @@ go run ./cmd/node
 
 ### Примеры CLI
 
-#### Пример карточки задачи (JSON)
+#### Пример проекции карточки задачи (JSON, не отдельный файл)
 ```json
 {
   "id": "OPS-104",
@@ -56,6 +56,9 @@ go run ./cmd/node
   "updated_at": "2026-02-12T16:40:00Z"
 }
 ```
+Источник данных:
+- Задачи хранятся как события в append-only event log (`data-dir`), а не как отдельные JSON-файлы.
+- S3/MinIO используется для бинарных вложений; в event log хранятся метаданные и хеши вложений.
 
 #### Пример отображения доски (терминал)
 ```text
@@ -326,7 +329,7 @@ go run ./cmd/node
 
 ### CLI Examples
 
-#### Example Task Card (JSON)
+#### Example Task Projection (JSON, not a stored file)
 ```json
 {
   "id": "OPS-104",
@@ -339,6 +342,9 @@ go run ./cmd/node
   "updated_at": "2026-02-12T16:40:00Z"
 }
 ```
+Data source:
+- Tasks are derived from append-only event log entries (`data-dir`), not stored as standalone JSON files.
+- S3/MinIO stores attachment binaries; event log stores attachment metadata and checksums.
 
 #### Example Board View (Terminal)
 ```text
