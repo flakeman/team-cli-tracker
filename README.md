@@ -144,11 +144,18 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/team/list"
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/security/audit/export?all=1"
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -H "X-Request-Id: req-001" \
   -d '{"project_id":"OPS","issue_id":"OPS-101","from":"todo","to":"in_progress"}' \
   "http://127.0.0.1:4101/api/v1/issue/transition"
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -H "X-Request-Id: req-002" \
   -d '{"project_id":"OPS","issue_id":"OPS-101"}' \
   "http://127.0.0.1:4101/api/v1/issue/archive"
+
+# важно: mutating master endpoints (/api/v1/master/*) требуют X-Request-Id для идемпотентности
+# audit хранится локально на каждой ноде (security_audit.jsonl); единая картина по кластеру:
+curl -k -H "Authorization: Bearer <token>" \
+  "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
 
 # Attachments (MVP)
 # A) quick link-mode: add/list/open/remove
@@ -403,6 +410,11 @@ go run ./cmd/node audit verify-integrity
 # audit export API (admin/lead token)
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/export?from=2026-02-12T00:00:00Z&to=2026-02-12T23:59:59Z&user=vova,qa&limit=100&cursor=0"
 curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
+
+# note:
+# - security_audit.jsonl is local per node;
+# - use master/audit/cluster-export for merged cluster view;
+# - mutating master endpoints require X-Request-Id.
 ```
 
 ### Docs

@@ -69,24 +69,25 @@ go test ./...
 - `listen_addr`
 - список peers
 
-### 7) Запуск ноды
+### 7) Каноничный запуск (актуально)
+Используй готовые скрипты из `deploy/`:
 ```bash
-go run ./cmd/node
+cp deploy/cluster.node-1.env.example deploy/cluster.env   # для node-1 (аналогично node-2/node-3)
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
+sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/team-cli-tracker/deploy/cluster.env
+cd /opt/team-cli-tracker && go build -o node ./cmd/node
+sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-tracker/deploy/cluster.env
 ```
 
-(временная команда для MVP-каркаса; systemd unit будет расширяться дальше)
-
-### 8) Systemd шаблон (когда будут аргументы запуска ноды)
-Пример пути юнита:
-- `/etc/systemd/system/team-cli-tracker.service`
-
-Далее:
+Проверка:
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable team-cli-tracker
-sudo systemctl start team-cli-tracker
-sudo systemctl status team-cli-tracker
+systemctl is-active team-cli-tracker
+curl -s http://127.0.0.1:4101/healthz
 ```
+
+### 8) Systemd runtime
+- Основной unit: `/etc/systemd/system/team-cli-tracker.service`
+- Рекомендуемый режим: secure transport/auth (см. `docs/RELEASE-CHECKLIST.md`)
 
 ### 9) Ops-чеклист
 - Только SSH key auth.
@@ -94,12 +95,9 @@ sudo systemctl status team-cli-tracker
 - Держать включенным fail2ban.
 - Поддерживать 3-node quorum для policy-операций.
 
-### 10) Следующий шаг деплоя
-После настройки сети нод реализовать и выкатить:
-1. Генерацию ключей ноды.
-2. Репликацию подписанных событий.
-3. Health и sync status endpoints.
-4. Service unit + rolling restart script.
+### 10) Примечание по legacy шагам
+- `go run ./cmd/node` из ранних версий считать legacy (только локальный dev smoke).
+- Для кластера использовать `deploy/*` скрипты и `systemd`.
 
 ---
 
@@ -172,24 +170,25 @@ Set unique:
 - `listen_addr`
 - peers list
 
-### 7) Run Node
+### 7) Canonical Runtime (current)
+Use `deploy/` scripts:
 ```bash
-go run ./cmd/node
+cp deploy/cluster.node-1.env.example deploy/cluster.env   # for node-1 (node-2/node-3 accordingly)
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
+sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/team-cli-tracker/deploy/cluster.env
+cd /opt/team-cli-tracker && go build -o node ./cmd/node
+sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-tracker/deploy/cluster.env
 ```
 
-(temporary command for MVP skeleton; service unit will be added in next iteration)
-
-### 8) Systemd Template (when node args are introduced)
-Example unit path:
-- `/etc/systemd/system/team-cli-tracker.service`
-
-Then:
+Verification:
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable team-cli-tracker
-sudo systemctl start team-cli-tracker
-sudo systemctl status team-cli-tracker
+systemctl is-active team-cli-tracker
+curl -s http://127.0.0.1:4101/healthz
 ```
+
+### 8) Systemd Runtime
+- Primary unit: `/etc/systemd/system/team-cli-tracker.service`
+- Recommended mode: secure transport/auth (see `docs/RELEASE-CHECKLIST.md`)
 
 ### 9) Ops Checklist
 - SSH key auth only.
@@ -197,9 +196,6 @@ sudo systemctl status team-cli-tracker
 - Keep fail2ban enabled.
 - Keep 3-node quorum alive for policy actions.
 
-### 10) Next Deployment Step
-After node networking is ready, implement and deploy:
-1. Node key generation.
-2. Signed event replication.
-3. Health and sync status endpoints.
-4. Service unit + rolling restart script.
+### 10) Legacy Note
+- Treat `go run ./cmd/node` as legacy (local dev smoke only).
+- For clusters, use `deploy/*` scripts and `systemd`.

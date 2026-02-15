@@ -52,9 +52,9 @@
 - `GET /api/v1/governance`
 
 4. Audit/Security
-- `GET /api/v1/audit`
-- `GET /api/v1/audit/export`
-- `POST /api/v1/audit/verify-integrity`
+- `GET /api/v1/security/audit`
+- `GET /api/v1/security/audit/export`
+- `GET /api/v1/master/audit/cluster-export`
 
 ## Attachments Model
 Каждое вложение разделяется на:
