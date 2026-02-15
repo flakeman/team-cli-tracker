@@ -210,6 +210,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 ```
 
 ### Документация
+- Индекс документации по тегам: `docs/INDEX.md`
 - Спецификация архитектуры: `docs/SDD-01-decentralized-kanban.md`
 - SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`
 - SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`

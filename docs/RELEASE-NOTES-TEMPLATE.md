@@ -31,7 +31,7 @@ One-paragraph overview of the release intent.
 - Unit/integration tests:
   - `go test ./...` => `<result>`
 - 3-VPS smoke:
-  - `docs/SMOKE-MAIN-3VPS.md` => `<result>`
+  - `docs/SMOKE-MAIN-3VPS-2026-02-12.md` => `<result>`
 
 ## Upgrade Notes
 1. Required env vars:
