@@ -26,7 +26,7 @@ KA_VIP="${KA_VIP:-10.20.0.10/24}"
 KA_STATE="${KA_STATE:-BACKUP}"
 KA_CHECK_HOST="${KA_CHECK_HOST:-127.0.0.1}"
 KA_CHECK_PORT="${KA_CHECK_PORT:-8080}"
-KA_CHECK_PATH="${KA_CHECK_PATH:-/}"
+KA_CHECK_PATH="${KA_CHECK_PATH:-/api/v1/healthz}"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y

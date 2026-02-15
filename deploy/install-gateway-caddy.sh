@@ -38,14 +38,14 @@ apt-get update -y
 apt-get install -y caddy
 
 IFS=',' read -r -a raw_upstreams <<< "${GATEWAY_UPSTREAMS}"
-upstreams=""
+declare -a upstreams=()
 for u in "${raw_upstreams[@]}"; do
   x="$(echo "$u" | xargs)"
   [[ -z "$x" ]] && continue
-  upstreams="${upstreams}        reverse_proxy ${x}\n"
+  upstreams+=("$x")
 done
 
-if [[ -z "$upstreams" ]]; then
+if [[ "${#upstreams[@]}" -eq 0 ]]; then
   echo "no upstreams parsed from GATEWAY_UPSTREAMS"
   exit 1
 fi
@@ -58,12 +58,16 @@ if [[ "${GATEWAY_ENABLE_TLS:-true}" == "true" ]]; then
   # Binding to specific interfaces should be managed by host firewall/routing.
   site="${BOARD_DOMAIN}"
 else
-  site="${bind_addr}:${listen_port}"
+  site="http://${bind_addr}:${listen_port}"
 fi
+
+upstream_line="$(printf '%s ' "${upstreams[@]}")"
+upstream_line="${upstream_line% }"
 
 cat >/etc/caddy/Caddyfile <<EOF
 {
     admin off
+    auto_https off
 }
 
 ${site} {
@@ -73,7 +77,7 @@ ${site} {
         X-Content-Type-Options "nosniff"
         Referrer-Policy "no-referrer"
     }
-${upstreams%\\n}
+    reverse_proxy ${upstream_line}
 }
 EOF
 
