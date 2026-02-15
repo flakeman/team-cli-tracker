@@ -25,6 +25,9 @@ fi
 
 PROJECT_ID="${PROJECT_ID:-OPS}"
 NODE_PEERS_URLS="${NODE_PEERS_URLS:-}"
+LISTEN_ADDR="${LISTEN_ADDR:-:4101}"
+NODE_PUBLIC_URL="${NODE_PUBLIC_URL:-http://${NODE_ID}:4101}"
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
 SECURE_MODE_REQUIRED="${SECURE_MODE_REQUIRED:-true}"
 ATTACHMENT_BACKEND="${ATTACHMENT_BACKEND:-local}"
 ATTACHMENT_S3_ENDPOINT="${ATTACHMENT_S3_ENDPOINT:-}"
@@ -34,11 +37,31 @@ ATTACHMENT_S3_SECRET_KEY="${ATTACHMENT_S3_SECRET_KEY:-}"
 ATTACHMENT_S3_REGION="${ATTACHMENT_S3_REGION:-us-east-1}"
 ATTACHMENT_S3_SECURE="${ATTACHMENT_S3_SECURE:-false}"
 
+# Fallback: derive peer URLs from NODE_PEERS IDs if explicit URL list is not provided.
+if [[ -z "${NODE_PEERS_URLS}" ]] && [[ -n "${NODE_PEERS:-}" ]]; then
+  derived=""
+  IFS=',' read -r -a ids <<<"${NODE_PEERS}"
+  for id in "${ids[@]}"; do
+    p="$(echo "$id" | xargs)"
+    [[ -z "$p" ]] && continue
+    if [[ -n "$derived" ]]; then
+      derived="${derived},"
+    fi
+    derived="${derived}http://${p}:4101"
+  done
+  NODE_PEERS_URLS="${derived}"
+fi
+
+mkdir -p "${DATA_DIR}"
+
 cat >/etc/default/team-cli-tracker <<EOF
 PROJECT_ID=${PROJECT_ID}
 NODE_ID=${NODE_ID}
 NODE_PEERS=${NODE_PEERS}
 NODE_PEERS_URLS=${NODE_PEERS_URLS}
+LISTEN_ADDR=${LISTEN_ADDR}
+NODE_PUBLIC_URL=${NODE_PUBLIC_URL}
+DATA_DIR=${DATA_DIR}
 SECURE_MODE_REQUIRED=${SECURE_MODE_REQUIRED}
 ATTACHMENT_BACKEND=${ATTACHMENT_BACKEND}
 ATTACHMENT_S3_ENDPOINT=${ATTACHMENT_S3_ENDPOINT}
@@ -62,7 +85,7 @@ Group=${APP_GROUP}
 WorkingDirectory=${REPO_DIR}
 Environment=PATH=/usr/local/go/bin:/usr/bin:/bin
 EnvironmentFile=/etc/default/team-cli-tracker
-ExecStart=/bin/bash -lc '/usr/local/go/bin/go run ./cmd/node serve --project-id "${PROJECT_ID}" --listen :4101 --node-id "${NODE_ID}" --public-url "http://${NODE_ID}.abuztech.ru:4101" --peers "${NODE_PEERS_URLS}" --data-dir "${PWD}/data" --secure-mode-required="${SECURE_MODE_REQUIRED}" --attachment-backend="${ATTACHMENT_BACKEND}" --attachment-s3-endpoint="${ATTACHMENT_S3_ENDPOINT}" --attachment-s3-bucket="${ATTACHMENT_S3_BUCKET}" --attachment-s3-access-key="${ATTACHMENT_S3_ACCESS_KEY}" --attachment-s3-secret-key="${ATTACHMENT_S3_SECRET_KEY}" --attachment-s3-region="${ATTACHMENT_S3_REGION}" --attachment-s3-secure="${ATTACHMENT_S3_SECURE}"'
+ExecStart=/bin/bash -lc '/usr/local/go/bin/go run ./cmd/node serve --project-id "${PROJECT_ID}" --listen "${LISTEN_ADDR}" --node-id "${NODE_ID}" --public-url "${NODE_PUBLIC_URL}" --peers "${NODE_PEERS_URLS}" --data-dir "${DATA_DIR}" --secure-mode-required="${SECURE_MODE_REQUIRED}" --attachment-backend="${ATTACHMENT_BACKEND}" --attachment-s3-endpoint="${ATTACHMENT_S3_ENDPOINT}" --attachment-s3-bucket="${ATTACHMENT_S3_BUCKET}" --attachment-s3-access-key="${ATTACHMENT_S3_ACCESS_KEY}" --attachment-s3-secret-key="${ATTACHMENT_S3_SECRET_KEY}" --attachment-s3-region="${ATTACHMENT_S3_REGION}" --attachment-s3-secure="${ATTACHMENT_S3_SECURE}"'
 Restart=always
 RestartSec=3
 

@@ -4708,7 +4708,7 @@ func resolvedAssigneeForScope(state boardRenderState) string {
 func printUsage() {
 	fmt.Println("team-cli-tracker node")
 	fmt.Println("usage:")
-	fmt.Println("  node identity --node-id node-1 --data-dir ./data")
+	fmt.Println("  node identity --node-id srv1 --data-dir ./data")
 	fmt.Println("  node issue create --project-id OPS --issue-id OPS-1 --summary \"...\" [--priority high] [--assignee user]")
 	fmt.Println("  node issue transition --project-id OPS --issue-id OPS-1 --from todo --to in_progress [--policy-url http://127.0.0.1:4101]")
 	fmt.Println("  node issue comment --project-id OPS --issue-id OPS-1 --text \"...\"")
@@ -4736,8 +4736,8 @@ func printUsage() {
 	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
 	fmt.Println("  node team offboard --project-id OPS --user-id u1")
 	fmt.Println("  node team list")
-	fmt.Println("  node serve ... [--rate-limit-per-min 120] [--rate-limit-sensitive-per-min 30] [--discovery-enabled true] [--public-url http://node-1:4101]")
-	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader node-1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
+	fmt.Println("  node serve ... [--rate-limit-per-min 120] [--rate-limit-sensitive-per-min 30] [--discovery-enabled true] [--public-url http://srv1:4101]")
+	fmt.Println("  node serve --project-id OPS --listen :4101 --node-role admin --preferred-leader srv1 --peers http://127.0.0.1:4102,http://127.0.0.1:4103")
 }
 
 func parseAuditTimeRange(fromRaw, toRaw string) (*time.Time, *time.Time, error) {
