@@ -1162,6 +1162,40 @@ func TestMasterAPIBootstrapEndpoints(t *testing.T) {
 	}
 }
 
+func TestMasterIssueCreateAlias(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "master-issues"), "srv1", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"dev-token": {UserID: "dev1", Role: "dev", Active: true},
+	}
+
+	body := []byte(`{"project_id":"OPS","issue_id":"OPS-777","summary":"master alias create","priority":"medium","assignee":""}`)
+	req, err := http.NewRequest(http.MethodPost, srv.url+"/master/issues/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer dev-token")
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d want=%d", res.StatusCode, http.StatusCreated)
+	}
+
+	all, err := srv.syncServer.log.ReadAll()
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if !issueExistsInEvents("OPS", "OPS-777", all) {
+		t.Fatalf("issue OPS-777 was not created via master alias")
+	}
+}
+
 func TestRateLimitKeyUsesStableClientIP(t *testing.T) {
 	s := &syncServer{}
 	req1, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
@@ -2504,6 +2538,11 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
 	mux.HandleFunc("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
+	mux.HandleFunc("/master/issues/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/transition", s.withAuthRoles(s.issueTransition, "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/archive", s.withAuthRoles(s.issueArchive, "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/unarchive", s.withAuthRoles(s.issueUnarchive, "admin", "lead", "dev", "qa"))
 	mux.HandleFunc("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
 	mux.HandleFunc("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
 	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))

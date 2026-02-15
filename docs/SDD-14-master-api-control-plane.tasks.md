@@ -4,7 +4,7 @@
 - [x] T14-002 Add bootstrap endpoints: `master/health`, `master/capabilities`.
 - [x] T14-003 Add RBAC protection for bootstrap endpoints (`admin|lead`).
 - [x] T14-004 Add automated tests for bootstrap endpoints.
-- [ ] T14-005 Add `/api/v1/master/issues/*` parity aliases.
+- [x] T14-005 Add `/api/v1/master/issues/*` parity aliases.
 - [ ] T14-006 Add `/api/v1/master/team|auth|trust|governance/*` parity aliases.
 - [ ] T14-007 Add master cluster control endpoints.
 - [ ] T14-008 Add idempotency contract for master mutating operations.
