@@ -250,6 +250,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - Дорожная карта: `docs/ROADMAP.md`
 - Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Runbook Ubuntu 24 + 3 VPS + real users: `docs/DEPLOYMENT-UBUNTU24-3VPS-REAL-USERS.md`
+- Единая точка входа (dynamic/static IP scenarios): `docs/DEPLOYMENT-SINGLE-ENTRYPOINT.md`
 - Скрипты деплоя: `deploy/README.md`
 
 ### Ближайший план
@@ -420,6 +421,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - Technical debt register: `docs/TECH-DEBT.md`
 - Delivery roadmap: `docs/ROADMAP.md`
 - 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
+- Single entrypoint deployment (dynamic/static IP): `docs/DEPLOYMENT-SINGLE-ENTRYPOINT.md`
 - Deploy scripts: `deploy/README.md`
 
 ### Near-Term Plan
