@@ -352,6 +352,11 @@ Decentralized CLI Kanban tracker for teams working from different computers, inc
 - SDD and roadmap are defined.
 - Next milestone: first 3-node syncable cluster.
 
+### SSH Topology (3 VPS)
+- `srv1-22221 = srv1.example.internal` (SSH port `22`)
+- `srv2-22222 = srv2.example.internal` (SSH port `22`)
+- `srv3-22223 = srv3.example.internal` (SSH port `22`)
+
 ### Quick Start (Local)
 ```bash
 go test ./...
@@ -518,16 +523,31 @@ curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master
 # - mutating master endpoints require X-Request-Id.
 ```
 
-### Project Hub
-- Quick docs index: `docs/INDEX.md`
-- Architecture + SDD stream: `docs/SDD-01-decentralized-kanban.md`
+### Documentation
+- Start here: `docs/INDEX.md`
+- Architecture: `docs/SDD-01-decentralized-kanban.md`
 - Roadmap: `docs/ROADMAP.md`
-- Release checklist: `docs/RELEASE-CHECKLIST.md`
-- Latest smoke evidence: `docs/SMOKE-SECURE-SYSTEMD-3VPS-2026-02-15.md`
-- Master API smoke: `docs/SMOKE-MASTER-API-3VPS-2026-02-15.md`
-- Secure deploy (3 nodes): `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
-- Isolated WG + HA entrypoint: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
 - Deploy scripts: `deploy/README.md`
+
+### Operations
+- 3-node deploy: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
+- Isolated WG + HA: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
+- Release checklist: `docs/RELEASE-CHECKLIST.md`
+- Rollback runbook: `docs/ROLLBACK-RUNBOOK.md`
+- Security runbook: `docs/SECURITY-RUNBOOK.md`
+
+### Community
+- License: `LICENSE`
+- Contributing guide: `CONTRIBUTING.md`
+- Code of Conduct: `CODE_OF_CONDUCT.md`
+- Security policy: `SECURITY.md`
+
+### Current Focus
+1. 3-node production stability (`systemd`, secure mode, health/smoke).
+2. Master API as a unified control-plane endpoint (issues/team/trust/governance/auth/audit).
+3. End-to-end audit with cluster export (`master/audit/cluster-export`).
+4. File storage model: S3/MinIO for binaries; event log keeps metadata and checksums.
+5. Single-entrypoint and HA profiles in isolated contour (WG + gateway/VIP).
 
 
 
