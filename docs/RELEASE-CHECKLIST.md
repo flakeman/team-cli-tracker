@@ -31,7 +31,9 @@ Owner: vova
 - [x] Audit integrity verification passes.
 
 ## 5) Attachments
-- [~] Attachment backend is selected (`local` or `s3`) and documented. (local works; final prod choice pending)
+- [x] Attachment backend is selected (`local` or `s3`) and documented. (prod baseline: `s3`, dev fallback: `local`)
+- [ ] Distributed MinIO (`x3`) is deployed and healthy.
+- [ ] `s3.internal` endpoint is stable via selected HA profile.
 - [x] `initiate -> upload -> complete -> verify` flow passes.
 - [x] `verify-all` passes for current project.
 - [ ] Storage capacity/cleanup policy exists.

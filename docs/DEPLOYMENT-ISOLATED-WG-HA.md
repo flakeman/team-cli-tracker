@@ -59,7 +59,37 @@ sudo bash deploy/install-gateway-caddy.sh deploy/gateway.env
 
 ---
 
-## Step 3: Single Entrypoint (`board.internal`) options
+## Step 3: S3 Storage (Distributed MinIO on all nodes)
+
+On each node:
+1. `cp deploy/minio.env.example deploy/minio.env`
+2. Set:
+   - `MINIO_NODE_ID`
+   - `MINIO_BIND_ADDRESS` (`10.20.0.x`)
+   - `MINIO_DISTRIBUTED_ENDPOINTS` (all 3 nodes)
+   - `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`
+   - `MINIO_BUCKET=team-cli-attachments`
+3. Install MinIO:
+```bash
+sudo bash deploy/install-minio.sh deploy/minio.env
+sudo bash deploy/install-minio-systemd.sh deploy/minio.env
+```
+4. Bootstrap bucket and validate:
+```bash
+bash deploy/bootstrap-minio.sh deploy/minio.env
+bash deploy/minio-healthcheck.sh deploy/minio.env
+```
+
+Tracker nodes must use S3 flags:
+- `--attachment-backend s3`
+- `--attachment-s3-endpoint s3.internal:9000`
+- `--attachment-s3-bucket team-cli-attachments`
+- `--attachment-s3-access-key ...`
+- `--attachment-s3-secret-key ...`
+
+---
+
+## Step 4: Single Entrypoint (`board.internal`) options
 
 Choose one option.
 
@@ -89,6 +119,8 @@ Choose one option.
   - Option A/B/C keeps entrypoint available when configured correctly.
 - If one tracker node dies:
   - 3-node cluster continues with quorum.
+- If one MinIO node dies:
+  - distributed MinIO continues; verify bucket health and remaining quorum.
 - If two nodes die:
   - write-path may stop due to quorum loss.
 

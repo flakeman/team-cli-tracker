@@ -10,6 +10,10 @@ All notable changes are documented here.
   - role-deny checks
   - attachment initiate/upload/complete/verify flow
   - 2-3s transition cadence for live board observation.
+- Isolated deployment artifacts for storage/networking:
+  - WireGuard install/env templates
+  - distributed MinIO install/systemd/bootstrap/healthcheck scripts
+  - `docs/DEPLOYMENT-ISOLATED-WG-HA.md` with single-entrypoint HA modes.
 
 ### Changed
 - Deploy/runtime validation on 3-node VPS cluster moved to `systemd` service (`team-cli-rerun.service`) with:
