@@ -1281,6 +1281,7 @@ func runServe(args []string) {
 		attachmentBackend:    backend,
 		attachmentS3Client:   s3Client,
 		attachmentS3Bucket:   s3Bucket,
+		masterIdemSeen:       map[string]int64{},
 		webhooks:             map[string]webhookSubscription{},
 	}
 	if err := s.loadWebhooks(); err != nil {
@@ -1305,11 +1306,11 @@ func runServe(args []string) {
 	register("/issue/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
 	register("/issue/archive", s.withAuthRoles(s.issueArchive, "admin", "lead", "dev", "qa"))
 	register("/issue/unarchive", s.withAuthRoles(s.issueUnarchive, "admin", "lead", "dev", "qa"))
-	register("/master/issues/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
-	register("/master/issues/transition", s.withAuthRoles(s.issueTransition, "admin", "lead", "dev", "qa"))
-	register("/master/issues/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
-	register("/master/issues/archive", s.withAuthRoles(s.issueArchive, "admin", "lead", "dev", "qa"))
-	register("/master/issues/unarchive", s.withAuthRoles(s.issueUnarchive, "admin", "lead", "dev", "qa"))
+	register("/master/issues/create", s.withAuthRoles(s.withMasterIdempotency(s.issueCreate), "admin", "lead", "dev", "qa"))
+	register("/master/issues/transition", s.withAuthRoles(s.withMasterIdempotency(s.issueTransition), "admin", "lead", "dev", "qa"))
+	register("/master/issues/comment", s.withAuthRoles(s.withMasterIdempotency(s.issueComment), "admin", "lead", "dev", "qa"))
+	register("/master/issues/archive", s.withAuthRoles(s.withMasterIdempotency(s.issueArchive), "admin", "lead", "dev", "qa"))
+	register("/master/issues/unarchive", s.withAuthRoles(s.withMasterIdempotency(s.issueUnarchive), "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/initiate", s.withAuthRoles(s.issueAttachmentInitiate, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/complete", s.withAuthRoles(s.issueAttachmentComplete, "admin", "lead", "dev", "qa"))
 	register("/issue/attachment/add", s.withAuthRoles(s.issueAttachmentAdd, "admin", "lead", "dev", "qa"))
@@ -1343,27 +1344,27 @@ func runServe(args []string) {
 	register("/trust/join", s.withAuthAny(s.trustJoin))
 	register("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
 	register("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
-	register("/master/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
-	register("/master/trust/join", s.withAuthAny(s.trustJoin))
-	register("/master/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
+	register("/master/trust/invite", s.withAuthRoles(s.withMasterIdempotency(s.trustInvite), "admin", "lead"))
+	register("/master/trust/join", s.withAuthAny(s.withMasterIdempotency(s.trustJoin)))
+	register("/master/trust/revoke", s.withAuthRoles(s.withMasterIdempotency(s.trustRevoke), "admin", "lead"))
 	register("/master/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
 	register("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
 	register("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
 	register("/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
 	register("/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
-	register("/master/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
-	register("/master/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
-	register("/master/team/offboard", s.withAuthRoles(s.teamOffboard, "admin", "lead"))
+	register("/master/team/onboard", s.withAuthRoles(s.withMasterIdempotency(s.teamOnboard), "admin", "lead"))
+	register("/master/team/role-change", s.withAuthRoles(s.withMasterIdempotency(s.teamRoleChange), "admin", "lead"))
+	register("/master/team/offboard", s.withAuthRoles(s.withMasterIdempotency(s.teamOffboard), "admin", "lead"))
 	register("/master/team/list", s.withAuthRoles(s.teamList, "admin", "lead"))
 	register("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
 	register("/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	register("/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
-	register("/master/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
-	register("/master/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
+	register("/master/governance/node-role", s.withAuthRoles(s.withMasterIdempotency(s.governanceNodeRole), "admin", "lead"))
+	register("/master/governance/reconfigure", s.withAuthRoles(s.withMasterIdempotency(s.governanceReconfigure), "admin", "lead"))
 	register("/master/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
 	register("/master/cluster/health", s.withAuthRoles(s.masterClusterHealth, "admin", "lead"))
 	register("/master/cluster/nodes", s.withAuthRoles(s.masterClusterNodes, "admin", "lead"))
-	register("/master/cluster/reconfigure", s.withAuthRoles(s.masterClusterReconfigure, "admin", "lead"))
+	register("/master/cluster/reconfigure", s.withAuthRoles(s.withMasterIdempotency(s.masterClusterReconfigure), "admin", "lead"))
 	register("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
 	register("/security/audit/export", s.withAuthRoles(s.securityAuditExport, "admin", "lead"))
 	register("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
@@ -1371,10 +1372,10 @@ func runServe(args []string) {
 	register("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
 	register("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
 	register("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
-	register("/master/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
-	register("/master/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
+	register("/master/auth/issue", s.withAuthRoles(s.withMasterIdempotency(s.authIssue), "admin"))
+	register("/master/auth/revoke", s.withAuthRoles(s.withMasterIdempotency(s.authRevoke), "admin"))
 	register("/master/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
-	register("/master/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
+	register("/master/auth/bind-role", s.withAuthRoles(s.withMasterIdempotency(s.authBindRole), "admin"))
 	register("/master/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
 	register("/master/health", s.withAuthRoles(s.masterHealth, "admin", "lead"))
 	register("/master/capabilities", s.withAuthRoles(s.masterCapabilities, "admin", "lead"))
@@ -1446,6 +1447,8 @@ type syncServer struct {
 	attachmentVerifyMismatch atomic.Uint64
 	attachmentVerifyErrors   atomic.Uint64
 	attachmentVerifySchedulerActive bool
+	masterIdemMu sync.Mutex
+	masterIdemSeen map[string]int64
 	webhookMu sync.Mutex
 	webhooks  map[string]webhookSubscription
 }
@@ -5846,6 +5849,59 @@ func (s *syncServer) withAuthRoles(next http.HandlerFunc, roles ...string) http.
 	}
 }
 
+func (s *syncServer) withMasterIdempotency(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := normalizeAPIV1Path(r.URL.Path)
+		if !strings.HasPrefix(path, "/master/") {
+			next(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		default:
+			next(w, r)
+			return
+		}
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+		if requestID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "x-request-id is required for master mutating requests"})
+			return
+		}
+		actor := s.actorFromReq(r)
+		key := actor + "|" + r.Method + "|" + path + "|" + requestID
+		now := time.Now().UTC().Unix()
+
+		s.masterIdemMu.Lock()
+		if s.masterIdemSeen == nil {
+			s.masterIdemSeen = map[string]int64{}
+		}
+		if firstSeen, ok := s.masterIdemSeen[key]; ok {
+			s.masterIdemMu.Unlock()
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status":            "duplicate",
+				"request_id":        requestID,
+				"idempotency_key":   key,
+				"first_seen_unix":   firstSeen,
+				"master_idempotent": true,
+			})
+			return
+		}
+		// Keep map bounded to avoid unbounded in-memory growth for long-lived processes.
+		if len(s.masterIdemSeen) > 50000 {
+			cutoff := now - 24*3600
+			for k, ts := range s.masterIdemSeen {
+				if ts < cutoff {
+					delete(s.masterIdemSeen, k)
+				}
+			}
+		}
+		s.masterIdemSeen[key] = now
+		s.masterIdemMu.Unlock()
+
+		next(w, r)
+	}
+}
+
 func (s *syncServer) authenticate(r *http.Request) (authPrincipal, bool) {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
@@ -6225,4 +6281,21 @@ func normalizePeerURL(raw string) string {
 	u.RawQuery = ""
 	u.Fragment = ""
 	return strings.TrimRight(u.String(), "/")
+}
+
+func normalizeAPIV1Path(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return "/"
+	}
+	if strings.HasPrefix(p, "/api/v1/") {
+		p = strings.TrimPrefix(p, "/api/v1")
+	}
+	if p == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
 }

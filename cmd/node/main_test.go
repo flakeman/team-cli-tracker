@@ -1029,6 +1029,7 @@ func TestAuthzDenialForProtectedEndpoint(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer dev-token")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Id", "req-master-777")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("do request: %v", err)
@@ -1178,6 +1179,7 @@ func TestMasterIssueCreateAlias(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer dev-token")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Id", "req-master-777")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("do request: %v", err)
@@ -1196,6 +1198,57 @@ func TestMasterIssueCreateAlias(t *testing.T) {
 	}
 }
 
+func TestMasterIssueCreateIdempotencyByRequestID(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "master-idem"), "srv1", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"dev-token": {UserID: "dev1", Role: "dev", Active: true},
+	}
+
+	body := []byte(`{"project_id":"OPS","issue_id":"OPS-778","summary":"idem create","priority":"medium","assignee":""}`)
+	req1, _ := http.NewRequest(http.MethodPost, srv.url+"/master/issues/create", bytes.NewReader(body))
+	req1.Header.Set("Authorization", "Bearer dev-token")
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-Request-Id", "req-778")
+	res1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("first request failed: %v", err)
+	}
+	defer res1.Body.Close()
+	if res1.StatusCode != http.StatusCreated {
+		t.Fatalf("first status=%d want=%d", res1.StatusCode, http.StatusCreated)
+	}
+
+	req2, _ := http.NewRequest(http.MethodPost, srv.url+"/master/issues/create", bytes.NewReader(body))
+	req2.Header.Set("Authorization", "Bearer dev-token")
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Request-Id", "req-778")
+	res2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("second status=%d want=%d", res2.StatusCode, http.StatusOK)
+	}
+
+	all, err := srv.syncServer.log.ReadAll()
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	createCount := 0
+	for _, e := range all {
+		if e.ProjectID == "OPS" && e.EntityID == "OPS-778" && e.Type == "issue.create" {
+			createCount++
+		}
+	}
+	if createCount != 1 {
+		t.Fatalf("issue.create count=%d want=1", createCount)
+	}
+}
+
 func TestMasterControlAliasesTeamAuthTrustGovernance(t *testing.T) {
 	base := t.TempDir()
 	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "master-control"), "srv1", "OPS")
@@ -1211,6 +1264,7 @@ func TestMasterControlAliasesTeamAuthTrustGovernance(t *testing.T) {
 	reqTeam, _ := http.NewRequest(http.MethodPost, srv.url+"/master/team/onboard", bytes.NewReader(teamBody))
 	reqTeam.Header.Set("Authorization", "Bearer lead-token")
 	reqTeam.Header.Set("Content-Type", "application/json")
+	reqTeam.Header.Set("X-Request-Id", "req-master-team-1")
 	resTeam, err := http.DefaultClient.Do(reqTeam)
 	if err != nil {
 		t.Fatalf("master/team/onboard request failed: %v", err)
@@ -1249,6 +1303,7 @@ func TestMasterControlAliasesTeamAuthTrustGovernance(t *testing.T) {
 	reqGov, _ := http.NewRequest(http.MethodPost, srv.url+"/master/governance/node-role", bytes.NewReader(govBody))
 	reqGov.Header.Set("Authorization", "Bearer lead-token")
 	reqGov.Header.Set("Content-Type", "application/json")
+	reqGov.Header.Set("X-Request-Id", "req-master-gov-1")
 	resGov, err := http.DefaultClient.Do(reqGov)
 	if err != nil {
 		t.Fatalf("master/governance/node-role request failed: %v", err)
@@ -1295,6 +1350,7 @@ func TestMasterClusterControlEndpoints(t *testing.T) {
 	reqReconf, _ := http.NewRequest(http.MethodPost, srv.url+"/master/cluster/reconfigure", bytes.NewReader(body))
 	reqReconf.Header.Set("Authorization", "Bearer lead-token")
 	reqReconf.Header.Set("Content-Type", "application/json")
+	reqReconf.Header.Set("X-Request-Id", "req-master-cluster-reconf-1")
 	resReconf, err := http.DefaultClient.Do(reqReconf)
 	if err != nil {
 		t.Fatalf("master/cluster/reconfigure request failed: %v", err)
@@ -2647,29 +2703,29 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
 	mux.HandleFunc("/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
 	mux.HandleFunc("/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
-	mux.HandleFunc("/master/trust/invite", s.withAuthRoles(s.trustInvite, "admin", "lead"))
-	mux.HandleFunc("/master/trust/revoke", s.withAuthRoles(s.trustRevoke, "admin", "lead"))
+	mux.HandleFunc("/master/trust/invite", s.withAuthRoles(s.withMasterIdempotency(s.trustInvite), "admin", "lead"))
+	mux.HandleFunc("/master/trust/revoke", s.withAuthRoles(s.withMasterIdempotency(s.trustRevoke), "admin", "lead"))
 	mux.HandleFunc("/master/trust/list", s.withAuthRoles(s.trustList, "admin", "lead"))
-	mux.HandleFunc("/master/issues/create", s.withAuthRoles(s.issueCreate, "admin", "lead", "dev", "qa"))
-	mux.HandleFunc("/master/issues/transition", s.withAuthRoles(s.issueTransition, "admin", "lead", "dev", "qa"))
-	mux.HandleFunc("/master/issues/comment", s.withAuthRoles(s.issueComment, "admin", "lead", "dev", "qa"))
-	mux.HandleFunc("/master/issues/archive", s.withAuthRoles(s.issueArchive, "admin", "lead", "dev", "qa"))
-	mux.HandleFunc("/master/issues/unarchive", s.withAuthRoles(s.issueUnarchive, "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/create", s.withAuthRoles(s.withMasterIdempotency(s.issueCreate), "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/transition", s.withAuthRoles(s.withMasterIdempotency(s.issueTransition), "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/comment", s.withAuthRoles(s.withMasterIdempotency(s.issueComment), "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/archive", s.withAuthRoles(s.withMasterIdempotency(s.issueArchive), "admin", "lead", "dev", "qa"))
+	mux.HandleFunc("/master/issues/unarchive", s.withAuthRoles(s.withMasterIdempotency(s.issueUnarchive), "admin", "lead", "dev", "qa"))
 	mux.HandleFunc("/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
 	mux.HandleFunc("/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
-	mux.HandleFunc("/master/team/onboard", s.withAuthRoles(s.teamOnboard, "admin", "lead"))
-	mux.HandleFunc("/master/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
+	mux.HandleFunc("/master/team/onboard", s.withAuthRoles(s.withMasterIdempotency(s.teamOnboard), "admin", "lead"))
+	mux.HandleFunc("/master/team/role-change", s.withAuthRoles(s.withMasterIdempotency(s.teamRoleChange), "admin", "lead"))
 	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
-	mux.HandleFunc("/master/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/master/governance/node-role", s.withAuthRoles(s.withMasterIdempotency(s.governanceNodeRole), "admin", "lead"))
 	mux.HandleFunc("/master/cluster/health", s.withAuthRoles(s.masterClusterHealth, "admin", "lead"))
 	mux.HandleFunc("/master/cluster/nodes", s.withAuthRoles(s.masterClusterNodes, "admin", "lead"))
-	mux.HandleFunc("/master/cluster/reconfigure", s.withAuthRoles(s.masterClusterReconfigure, "admin", "lead"))
+	mux.HandleFunc("/master/cluster/reconfigure", s.withAuthRoles(s.withMasterIdempotency(s.masterClusterReconfigure), "admin", "lead"))
 	mux.HandleFunc("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
 	mux.HandleFunc("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
 	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
 	mux.HandleFunc("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
 	mux.HandleFunc("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
-	mux.HandleFunc("/master/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
+	mux.HandleFunc("/master/auth/issue", s.withAuthRoles(s.withMasterIdempotency(s.authIssue), "admin"))
 	mux.HandleFunc("/master/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
 	mux.HandleFunc("/master/health", s.withAuthRoles(s.masterHealth, "admin", "lead"))
 	mux.HandleFunc("/master/capabilities", s.withAuthRoles(s.masterCapabilities, "admin", "lead"))
