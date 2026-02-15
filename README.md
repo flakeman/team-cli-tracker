@@ -296,67 +296,23 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 ```
 
 ### Документация
-- Индекс документации по тегам: `docs/INDEX.md`
-- Спецификация архитектуры: `docs/SDD-01-decentralized-kanban.md`
-- SDD ближайшего этапа: `docs/SDD-02-near-term-execution-plan.md`
-- SDD безопасности и жизненного цикла команды: `docs/SDD-03-security-and-team-lifecycle.md`
-- SDD consensus-критичных мутаций: `docs/SDD-04-consensus-critical-mutations.md`
-- SDD board UX, 3-VPS smoke и release baseline: `docs/SDD-05-board-smoke-and-release.md`
-- SDD сквозного логирования и выгрузки аудита: `docs/SDD-06-end-to-end-audit-logging-and-export.md`
-- План SDD-06: `docs/SDD-06-end-to-end-audit-logging-and-export.plan.md`
-- Задачи SDD-06: `docs/SDD-06-end-to-end-audit-logging-and-export.tasks.md`
-- SDD визуальной полировки board: `docs/SDD-07-board-visual-polish.md`
-- План SDD-07: `docs/SDD-07-board-visual-polish.plan.md`
-- Задачи SDD-07: `docs/SDD-07-board-visual-polish.tasks.md`
-- SDD интерактивного board-режима: `docs/SDD-08-board-interactive-and-operator-flow.md`
-- План SDD-08: `docs/SDD-08-board-interactive-and-operator-flow.plan.md`
-- Задачи SDD-08: `docs/SDD-08-board-interactive-and-operator-flow.tasks.md`
-- SDD подсчётов board и cadence interactive: `docs/SDD-09-board-counting-and-interactive-cadence.md`
-- План SDD-09: `docs/SDD-09-board-counting-and-interactive-cadence.plan.md`
-- Задачи SDD-09: `docs/SDD-09-board-counting-and-interactive-cadence.tasks.md`
-- SDD parity interactive с protected policy flow: `docs/SDD-10-interactive-protected-policy-parity.md`
-- План SDD-10: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
-- Задачи SDD-10: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
-- SDD production deployment и onboarding реальных пользователей: `docs/SDD-11-production-deployment-and-real-user-onboarding.md`
-- План SDD-11: `docs/SDD-11-production-deployment-and-real-user-onboarding.plan.md`
-- Задачи SDD-11: `docs/SDD-11-production-deployment-and-real-user-onboarding.tasks.md`
-- SDD Master API + file attachments: `docs/SDD-12-master-api-and-attachments.md`
-- План SDD-12: `docs/SDD-12-master-api-and-attachments.plan.md`
-- Задачи SDD-12: `docs/SDD-12-master-api-and-attachments.tasks.md`
-- Smoke attachments + webhooks (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-ATTACHMENTS-3VPS-2026-02-13.md`
-- Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
-- Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
-- Smoke master API (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-MASTER-API-3VPS-2026-02-15.md`
-- Smoke secure systemd runtime (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-SECURE-SYSTEMD-3VPS-2026-02-15.md`
-- Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
-- Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
-- Changelog: `CHANGELOG.md`
+- Start here: `docs/INDEX.md`
+- Architecture: `docs/SDD-01-decentralized-kanban.md`
+- Roadmap: `docs/ROADMAP.md`
+- Deploy scripts: `deploy/README.md`
+
+### Operations
+- 3-node deploy: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
+- Isolated WG + HA: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
-- Release notes template: `docs/RELEASE-NOTES-TEMPLATE.md`
-- Release notes draft (`v0.8.0`): `docs/releases-v0.8.0.md`
-- Operations backup/restore/rotation: `docs/OPERATIONS-BACKUP-RESTORE-AND-ROTATION.md`
 - Rollback runbook: `docs/ROLLBACK-RUNBOOK.md`
+- Security runbook: `docs/SECURITY-RUNBOOK.md`
 
 ### Community
 - License: `LICENSE`
 - Contributing guide: `CONTRIBUTING.md`
 - Code of Conduct: `CODE_OF_CONDUCT.md`
 - Security policy: `SECURITY.md`
-- Security runbook и incident checklist: `docs/SECURITY-RUNBOOK.md`
-- Реестр технического долга: `docs/TECH-DEBT.md`
-- Инженерный процесс и debt-review cadence: `docs/ENGINEERING-PROCESS.md`
-- Дорожная карта: `docs/ROADMAP.md`
-- Гайд деплоя на 3 ноды: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
-- Runbook Ubuntu 24 + 3 VPS + real users: `docs/DEPLOYMENT-UBUNTU24-3VPS-REAL-USERS.md`
-- Единая точка входа (dynamic/static IP scenarios): `docs/DEPLOYMENT-SINGLE-ENTRYPOINT.md`
-- Изолированный контур: WireGuard + multi-gateway + board.internal: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
-- SDD-13 (isolated WG + single entrypoint HA + S3 baseline): `docs/SDD-13-isolated-network-single-entrypoint-and-s3.md`
-- SDD-13 plan: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.plan.md`
-- SDD-13 tasks: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.tasks.md`
-- SDD-14 (Master API control plane): `docs/SDD-14-master-api-control-plane.md`
-- SDD-14 plan: `docs/SDD-14-master-api-control-plane.plan.md`
-- SDD-14 tasks: `docs/SDD-14-master-api-control-plane.tasks.md`
-- Скрипты деплоя: `deploy/README.md`
 
 ### Текущий фокус
 1. Production-стабильность 3-ноды (`systemd`, secure mode, health/smoke).
