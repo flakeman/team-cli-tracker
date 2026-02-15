@@ -103,6 +103,28 @@ Choose one option.
 - One virtual IP (example `10.20.0.10`) floats between nodes.
 - DNS: `board.internal -> 10.20.0.10`.
 - Good when dedicated LB is unavailable.
+- Recommended default for isolated contour.
+
+Quick setup (each node):
+1. `cp deploy/keepalived.env.example deploy/keepalived.env`
+2. Set per node:
+   - `srv1`: `KA_STATE=MASTER`, `KA_PRIORITY=120`
+   - `srv2`: `KA_STATE=BACKUP`, `KA_PRIORITY=110`
+   - `srv3`: `KA_STATE=BACKUP`, `KA_PRIORITY=100`
+   - common:
+     - `KA_INTERFACE=wg0`
+     - `KA_VRID=51`
+     - `KA_AUTH_PASS=<shared-pass>`
+     - `KA_VIP=10.20.0.10/24`
+3. Install:
+```bash
+sudo bash deploy/install-keepalived.sh deploy/keepalived.env
+```
+4. Verify VIP owner:
+```bash
+ip -4 addr show wg0 | grep 10.20.0.10 || true
+sudo systemctl is-active keepalived
+```
 
 ### Option C: DNS multi-A + health check
 - DNS:

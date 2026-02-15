@@ -14,6 +14,7 @@
 - `gateway.env.example` - шаблон параметров единой точки входа.
 - `wireguard.env.example` - шаблон WireGuard-параметров ноды.
 - `minio.env.example` - шаблон MinIO (S3) параметров ноды.
+- `keepalived.env.example` - шаблон VRRP/keepalived для VIP единой точки входа.
 - `bootstrap-debian13.sh` - базовая подготовка ОС + установка Go + clone/update репозитория.
 - `gen-node-config.sh` - создает `configs/node-<id>.yaml` из env-переменных.
 - `install-systemd-service.sh` - ставит и запускает `team-cli-tracker.service`.
@@ -24,6 +25,7 @@
 - `install-minio-systemd.sh` - ставит `minio.service` (distributed mode).
 - `bootstrap-minio.sh` - создаёт bucket/policy для вложений.
 - `minio-healthcheck.sh` - проверяет live/ready и доступ к bucket.
+- `install-keepalived.sh` - ставит keepalived и VRRP VIP failover для `board.internal`.
 - `pki-manage.sh` - базовая автоматизация PKI: init CA, issue/revoke node cert, CRL.
 - `RUNBOOK-QUICKSTART-3NODES.md` - точная последовательность команд по нодам.
 
@@ -44,6 +46,10 @@
 14. Скопировать `minio.env.example` в `minio.env`.
 15. Запустить `install-minio.sh` + `install-minio-systemd.sh` на всех нодах.
 16. Выполнить `bootstrap-minio.sh` (bucket/policy) и `minio-healthcheck.sh`.
+17. Для единой точки входа через VIP (рекомендуется для isolated):
+18. Скопировать `keepalived.env.example` в `keepalived.env` на каждой ноде.
+19. Проставить `KA_STATE/KA_PRIORITY` (MASTER на одной ноде, BACKUP на остальных).
+20. Запустить `install-keepalived.sh` на всех нодах.
 
 ---
 
@@ -61,6 +67,7 @@ This folder contains helper scripts for an Ubuntu 24 / Debian 13 `team-cli-track
 - `gateway.env.example` - single-entrypoint config template.
 - `wireguard.env.example` - WireGuard node config template.
 - `minio.env.example` - MinIO (S3) node config template.
+- `keepalived.env.example` - VRRP/keepalived template for VIP entrypoint.
 - `bootstrap-debian13.sh` - base OS setup + Go install + repo clone/update.
 - `gen-node-config.sh` - creates `configs/node-<id>.yaml` from env values.
 - `install-systemd-service.sh` - installs and starts `team-cli-tracker.service`.
@@ -71,6 +78,7 @@ This folder contains helper scripts for an Ubuntu 24 / Debian 13 `team-cli-track
 - `install-minio-systemd.sh` - installs `minio.service` (distributed mode).
 - `bootstrap-minio.sh` - creates bucket/policy for attachments.
 - `minio-healthcheck.sh` - validates live/ready and bucket access.
+- `install-keepalived.sh` - installs keepalived and VRRP VIP failover for `board.internal`.
 - `pki-manage.sh` - basic PKI automation: init CA, issue/revoke node cert, CRL.
 - `RUNBOOK-QUICKSTART-3NODES.md` - exact per-node command sequence.
 
@@ -91,3 +99,7 @@ This folder contains helper scripts for an Ubuntu 24 / Debian 13 `team-cli-track
 14. Copy `minio.env.example` to `minio.env`.
 15. Run `install-minio.sh` + `install-minio-systemd.sh` on all nodes.
 16. Run `bootstrap-minio.sh` and `minio-healthcheck.sh`.
+17. For VIP single entrypoint (recommended for isolated contour):
+18. Copy `keepalived.env.example` to `keepalived.env` on each node.
+19. Set `KA_STATE/KA_PRIORITY` (MASTER on one node, BACKUP on others).
+20. Run `install-keepalived.sh` on all nodes.

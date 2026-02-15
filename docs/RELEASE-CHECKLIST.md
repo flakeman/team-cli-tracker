@@ -7,6 +7,7 @@ Owner: vova
 ## 1) Network
 - [x] Inter-node `4101/tcp` is reachable both directions: `srv1 <-> srv2 <-> srv3`.
 - [ ] Public/consumer entrypoint is defined (`board DNS` or local-only mode). (pending decision)
+- [ ] Single entrypoint failover is configured (LB or VRRP VIP or DNS health-check).
 - [~] SSH keys are configured; password SSH is disabled or restricted. (keys configured between nodes, password access still enabled)
 
 ## 2) Runtime
