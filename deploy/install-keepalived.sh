@@ -50,7 +50,7 @@ if [[ -n "${KA_UNICAST_SRC_IP}" ]] && [[ -n "${KA_UNICAST_PEERS}" ]]; then
   for p in "${peers[@]}"; do
     x="$(echo "$p" | xargs)"
     [[ -z "$x" ]] && continue
-    peer_lines="${peer_lines}    ${x}\n"
+    peer_lines+=$'    '"${x}"$'\n'
   done
   if [[ -n "${peer_lines}" ]]; then
     unicast_block="  unicast_src_ip ${KA_UNICAST_SRC_IP}
