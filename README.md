@@ -244,6 +244,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
 - Release notes template: `docs/RELEASE-NOTES-TEMPLATE.md`
 - Release notes draft (`v0.8.0`): `docs/releases-v0.8.0.md`
+- Operations backup/restore/rotation: `docs/OPERATIONS-BACKUP-RESTORE-AND-ROTATION.md`
+- Rollback runbook: `docs/ROLLBACK-RUNBOOK.md`
 - Security runbook и incident checklist: `docs/SECURITY-RUNBOOK.md`
 - Реестр технического долга: `docs/TECH-DEBT.md`
 - Инженерный процесс и debt-review cadence: `docs/ENGINEERING-PROCESS.md`
@@ -421,6 +423,8 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
 - Release notes template: `docs/RELEASE-NOTES-TEMPLATE.md`
 - Release notes draft (`v0.8.0`): `docs/releases-v0.8.0.md`
+- Operations backup/restore/rotation: `docs/OPERATIONS-BACKUP-RESTORE-AND-ROTATION.md`
+- Rollback runbook: `docs/ROLLBACK-RUNBOOK.md`
 - Security runbook and incident checklist: `docs/SECURITY-RUNBOOK.md`
 - Technical debt register: `docs/TECH-DEBT.md`
 - Delivery roadmap: `docs/ROADMAP.md`

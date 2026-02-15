@@ -22,12 +22,12 @@ Owner: vova
 ## 3) Security
 - [x] `secure-mode-required=true` in prod.
 - [x] Auth is enabled and role policy validated (`admin/lead/dev/qa/viewer`).
-- [ ] Token rotation procedure exists and was tested.
+- [x] Token rotation procedure exists and was tested. (local drill: enable-encryption -> rotate-key -> recovery-drill passed on 2026-02-15)
 - [ ] TLS/mTLS decision is documented and applied (or private-trust boundary is approved).
 
 ## 4) Data and Recovery
-- [ ] Backup policy for `data-dir` exists (schedule + retention).
-- [ ] Restore drill was executed successfully.
+- [x] Backup policy for `data-dir` exists (schedule + retention). (documented via backup/restore runbook + scripts)
+- [x] Restore drill was executed successfully. (srv1 drill with archive restore and board projection check on 2026-02-15)
 - [x] Audit export works (`all`, `period`, `users`).
 - [x] Audit integrity verification passes.
 
@@ -47,14 +47,14 @@ Owner: vova
 - [x] Churn test passed (restart one node, then re-sync).
 
 ## 7) Observability
-- [ ] Logs are accessible and rotated. (accessible=yes, rotation policy pending)
-- [ ] Metrics endpoint is reachable and scraped.
-- [ ] Alerts configured for node down, sync failures, auth errors.
+- [~] Logs are accessible and rotated. (logrotate template added; rollout on all nodes pending)
+- [~] Metrics endpoint is reachable and scraped. (Prometheus scrape template added; live scraper rollout pending)
+- [~] Alerts configured for node down, sync failures, auth errors. (Prometheus alert rules added; Alertmanager wiring pending)
 
 ## 8) Release Artifacts
-- [ ] `CHANGELOG` updated.
+- [x] `CHANGELOG` updated.
 - [ ] Version tag prepared (`v0.x`).
-- [ ] Rollback plan documented (previous tag/commit + service restart steps).
+- [x] Rollback plan documented (previous tag/commit + service restart steps).
 - [x] Final smoke from `main` recorded in release notes.
 
 ---
