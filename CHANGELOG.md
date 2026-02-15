@@ -2,6 +2,27 @@
 
 All notable changes are documented here.
 
+## Unreleased
+
+### Added
+- `smoke.ps1` for end-to-end operator smoke from PowerShell:
+  - issue create/move/comment sequence
+  - role-deny checks
+  - attachment initiate/upload/complete/verify flow
+  - 2-3s transition cadence for live board observation.
+
+### Changed
+- Deploy/runtime validation on 3-node VPS cluster moved to `systemd` service (`team-cli-rerun.service`) with:
+  - `secure-mode-required=true`
+  - unified node IDs (`srv1/srv2/srv3`)
+  - peer mesh over `:4101`.
+
+### Verified
+- Cross-node consistency smoke on `srv1/srv2/srv3`:
+  - 40-issue bulk scenario
+  - churn check (`srv2` restart + re-sync)
+  - attachment replication and integrity verification across nodes.
+
 ## v0.8.0 - 2026-02-12
 
 ### Added
