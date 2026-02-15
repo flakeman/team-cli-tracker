@@ -11,6 +11,7 @@ Keywords: kanban, task-tracker, self-hosted, distributed, raft, cli, golang, wir
 - Приватная peer-to-peer совместная работа без обязательного статического публичного IP.
 - Подписанный аудит изменений задач.
 - Ролевой контроль переходов по workflow (`admin`, `lead`, `dev`, `qa`, `viewer`).
+- Хранение файлов-вложений в S3/MinIO (бинарные данные), с метаданными и checksum в event log.
 
 ### Целевая архитектура
 - Приватный P2P-оверлей: Tailscale/ZeroTier + libp2p.
@@ -302,6 +303,7 @@ Decentralized CLI Kanban tracker for teams working from different computers, inc
 - Private peer-to-peer collaboration without mandatory static public IP.
 - Signed audit trail for task changes.
 - Role-based workflow control for transitions (`admin`, `lead`, `dev`, `qa`, `viewer`).
+- Attachment binaries stored in S3/MinIO, while metadata and checksums remain in the event log.
 
 ### Core Architecture (Target)
 - Private P2P overlay: Tailscale/ZeroTier + libp2p.
