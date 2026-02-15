@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: team-cli-tracker
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - srv1.abuztech.ru:4101
+          - srv2.abuztech.ru:4101
+          - srv3.abuztech.ru:4101

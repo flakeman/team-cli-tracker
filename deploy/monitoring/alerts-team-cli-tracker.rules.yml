@@ -1,0 +1,47 @@
+groups:
+  - name: team-cli-tracker
+    rules:
+      - alert: ALT_001_SyncErrorBurst
+        expr: increase(pull_errors[5m]) > 0
+        for: 5m
+        labels:
+          severity: sev2
+        annotations:
+          summary: "Sync errors are increasing"
+          description: "pull_errors increased in last 5m."
+
+      - alert: ALT_002_SyncSuccessRatioLow
+        expr: sum(increase(sync_peer_pull_success[15m])) / sum(increase(sync_peer_pulls[15m])) < 0.95
+        for: 15m
+        labels:
+          severity: sev2
+        annotations:
+          summary: "Sync success ratio is below 95%"
+          description: "Investigate peer flapping, trust drift, or TLS/auth mismatch."
+
+      - alert: ALT_003_SensitiveRateLimitBurst
+        expr: increase(rate_limit_denied_sensitive[5m]) > 20
+        for: 5m
+        labels:
+          severity: sev2
+        annotations:
+          summary: "Sensitive endpoint rate limit burst"
+          description: "Potential abuse/scanning on sensitive endpoints."
+
+      - alert: ALT_004_AuthnDenialBurst
+        expr: increase(authn_denied_total[10m]) > 50
+        for: 10m
+        labels:
+          severity: sev2
+        annotations:
+          summary: "Authentication denial burst"
+          description: "Potential credential abuse or brute-force attempts."
+
+      - alert: ALT_005_AuthzDenialBurst
+        expr: increase(authz_denied_total[10m]) > 20
+        for: 10m
+        labels:
+          severity: sev3
+        annotations:
+          summary: "Authorization denial burst"
+          description: "Role/policy mismatch or suspicious action pattern."
