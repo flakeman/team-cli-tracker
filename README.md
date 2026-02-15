@@ -284,12 +284,12 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - SDD-14 tasks: `docs/SDD-14-master-api-control-plane.tasks.md`
 - Скрипты деплоя: `deploy/README.md`
 
-### Ближайший план
-1. Идентификация ноды и append подписанных событий.
-2. P2P-discovery пиров и синхронизация состояния.
-3. Базовые команды задач: create, transition, comment.
-4. CLI-рендер доски из реплицированного состояния.
-5. Проверка переходов через защищенный Raft-контур.
+### Текущий фокус
+1. Production-стабильность 3-ноды (`systemd`, secure mode, health/smoke).
+2. Master API как единая control-plane точка (issues/team/trust/governance/auth/audit).
+3. Сквозной аудит с кластерной выгрузкой (`master/audit/cluster-export`).
+4. Хранилище файлов: S3/MinIO для бинарных вложений; event log хранит только метаданные и checksum.
+5. Единая точка входа и HA-профили в изолированном контуре (WG + gateway/VIP).
 
 ---
 
