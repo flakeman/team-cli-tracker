@@ -50,6 +50,8 @@ sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/te
 ### 3) Установка и запуск systemd сервиса
 Запусти на каждой ноде:
 ```bash
+cd /opt/team-cli-tracker
+go build -o node ./cmd/node
 sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-tracker/deploy/cluster.env
 ```
 
@@ -165,6 +167,8 @@ sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/te
 ### 3) Install and start systemd service
 Run on each node:
 ```bash
+cd /opt/team-cli-tracker
+go build -o node ./cmd/node
 sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-tracker/deploy/cluster.env
 ```
 

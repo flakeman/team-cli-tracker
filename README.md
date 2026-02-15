@@ -239,6 +239,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - Smoke interactive board (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
 - Smoke master API (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-MASTER-API-3VPS-2026-02-15.md`
+- Smoke secure systemd runtime (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-SECURE-SYSTEMD-3VPS-2026-02-15.md`
 - Smoke board live (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`
@@ -421,6 +422,7 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD-10 tasks: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
 - Interactive board smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
 - Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
+- Secure systemd runtime smoke (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-SECURE-SYSTEMD-3VPS-2026-02-15.md`
 - Board live smoke (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
 - Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
 - Changelog: `CHANGELOG.md`

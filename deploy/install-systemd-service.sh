@@ -28,6 +28,7 @@ NODE_PEERS_URLS="${NODE_PEERS_URLS:-}"
 LISTEN_ADDR="${LISTEN_ADDR:-:4101}"
 NODE_PUBLIC_URL="${NODE_PUBLIC_URL:-http://${NODE_ID}:4101}"
 DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
+NODE_BIN="${NODE_BIN:-${REPO_DIR}/node}"
 SECURE_MODE_REQUIRED="${SECURE_MODE_REQUIRED:-true}"
 ATTACHMENT_BACKEND="${ATTACHMENT_BACKEND:-local}"
 ATTACHMENT_S3_ENDPOINT="${ATTACHMENT_S3_ENDPOINT:-}"
@@ -54,6 +55,12 @@ fi
 
 mkdir -p "${DATA_DIR}"
 
+if [[ ! -x "${NODE_BIN}" ]]; then
+  echo "node binary not found or not executable: ${NODE_BIN}"
+  echo "build it first (example): (cd ${REPO_DIR} && go build -o node ./cmd/node)"
+  exit 1
+fi
+
 cat >/etc/default/team-cli-tracker <<EOF
 PROJECT_ID=${PROJECT_ID}
 NODE_ID=${NODE_ID}
@@ -62,6 +69,7 @@ NODE_PEERS_URLS=${NODE_PEERS_URLS}
 LISTEN_ADDR=${LISTEN_ADDR}
 NODE_PUBLIC_URL=${NODE_PUBLIC_URL}
 DATA_DIR=${DATA_DIR}
+NODE_BIN=${NODE_BIN}
 SECURE_MODE_REQUIRED=${SECURE_MODE_REQUIRED}
 ATTACHMENT_BACKEND=${ATTACHMENT_BACKEND}
 ATTACHMENT_S3_ENDPOINT=${ATTACHMENT_S3_ENDPOINT}
@@ -83,9 +91,9 @@ Type=simple
 User=${APP_USER}
 Group=${APP_GROUP}
 WorkingDirectory=${REPO_DIR}
-Environment=PATH=/usr/local/go/bin:/usr/bin:/bin
+Environment=PATH=/usr/bin:/bin
 EnvironmentFile=/etc/default/team-cli-tracker
-ExecStart=/bin/bash -lc '/usr/local/go/bin/go run ./cmd/node serve --project-id "${PROJECT_ID}" --listen "${LISTEN_ADDR}" --node-id "${NODE_ID}" --public-url "${NODE_PUBLIC_URL}" --peers "${NODE_PEERS_URLS}" --data-dir "${DATA_DIR}" --secure-mode-required="${SECURE_MODE_REQUIRED}" --attachment-backend="${ATTACHMENT_BACKEND}" --attachment-s3-endpoint="${ATTACHMENT_S3_ENDPOINT}" --attachment-s3-bucket="${ATTACHMENT_S3_BUCKET}" --attachment-s3-access-key="${ATTACHMENT_S3_ACCESS_KEY}" --attachment-s3-secret-key="${ATTACHMENT_S3_SECRET_KEY}" --attachment-s3-region="${ATTACHMENT_S3_REGION}" --attachment-s3-secure="${ATTACHMENT_S3_SECURE}"'
+ExecStart=/bin/bash -lc '"${NODE_BIN}" serve --project-id "${PROJECT_ID}" --listen "${LISTEN_ADDR}" --node-id "${NODE_ID}" --public-url "${NODE_PUBLIC_URL}" --peers "${NODE_PEERS_URLS}" --data-dir "${DATA_DIR}" --secure-mode-required="${SECURE_MODE_REQUIRED}" --attachment-backend="${ATTACHMENT_BACKEND}" --attachment-s3-endpoint="${ATTACHMENT_S3_ENDPOINT}" --attachment-s3-bucket="${ATTACHMENT_S3_BUCKET}" --attachment-s3-access-key="${ATTACHMENT_S3_ACCESS_KEY}" --attachment-s3-secret-key="${ATTACHMENT_S3_SECRET_KEY}" --attachment-s3-region="${ATTACHMENT_S3_REGION}" --attachment-s3-secure="${ATTACHMENT_S3_SECURE}"'
 Restart=always
 RestartSec=3
 
