@@ -423,58 +423,16 @@ curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master
 # - mutating master endpoints require X-Request-Id.
 ```
 
-### Docs
-- Architecture spec: `docs/SDD-01-decentralized-kanban.md`
-- Near-term execution SDD: `docs/SDD-02-near-term-execution-plan.md`
-- Security and team lifecycle SDD: `docs/SDD-03-security-and-team-lifecycle.md`
-- Consensus-critical mutations SDD: `docs/SDD-04-consensus-critical-mutations.md`
-- Board UX, 3-VPS smoke, and release baseline SDD: `docs/SDD-05-board-smoke-and-release.md`
-- End-to-end audit logging and export SDD: `docs/SDD-06-end-to-end-audit-logging-and-export.md`
-- SDD-06 plan: `docs/SDD-06-end-to-end-audit-logging-and-export.plan.md`
-- SDD-06 tasks: `docs/SDD-06-end-to-end-audit-logging-and-export.tasks.md`
-- Board visual polish SDD: `docs/SDD-07-board-visual-polish.md`
-- SDD-07 plan: `docs/SDD-07-board-visual-polish.plan.md`
-- SDD-07 tasks: `docs/SDD-07-board-visual-polish.tasks.md`
-- Board interactive mode SDD: `docs/SDD-08-board-interactive-and-operator-flow.md`
-- SDD-08 plan: `docs/SDD-08-board-interactive-and-operator-flow.plan.md`
-- SDD-08 tasks: `docs/SDD-08-board-interactive-and-operator-flow.tasks.md`
-- Board counting and interactive cadence SDD: `docs/SDD-09-board-counting-and-interactive-cadence.md`
-- SDD-09 plan: `docs/SDD-09-board-counting-and-interactive-cadence.plan.md`
-- SDD-09 tasks: `docs/SDD-09-board-counting-and-interactive-cadence.tasks.md`
-- Interactive protected-policy parity SDD: `docs/SDD-10-interactive-protected-policy-parity.md`
-- SDD-10 plan: `docs/SDD-10-interactive-protected-policy-parity.plan.md`
-- SDD-10 tasks: `docs/SDD-10-interactive-protected-policy-parity.tasks.md`
-- Interactive board smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-BOARD-INTERACTIVE-3VPS-2026-02-13.md`
-- Extended smoke (`main`, 3 VPS, 2026-02-13): `docs/SMOKE-EXTENDED-3VPS-2026-02-13.md`
-- Secure systemd runtime smoke (`main`, 3 VPS, 2026-02-15): `docs/SMOKE-SECURE-SYSTEMD-3VPS-2026-02-15.md`
-- Board live smoke (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-BOARD-LIVE-3VPS-2026-02-12.md`
-- Smoke report (`main`, 3 VPS, 2026-02-12): `docs/SMOKE-MAIN-3VPS-2026-02-12.md`
-- Changelog: `CHANGELOG.md`
+### abuztech.ru Hub
+- Quick docs index: `docs/INDEX.md`
+- Architecture + SDD stream: `docs/SDD-01-decentralized-kanban.md`
+- Roadmap: `docs/ROADMAP.md`
 - Release checklist: `docs/RELEASE-CHECKLIST.md`
-- Release notes template: `docs/RELEASE-NOTES-TEMPLATE.md`
-- Release notes draft (`v0.8.0`): `docs/releases-v0.8.0.md`
-- Operations backup/restore/rotation: `docs/OPERATIONS-BACKUP-RESTORE-AND-ROTATION.md`
-- Rollback runbook: `docs/ROLLBACK-RUNBOOK.md`
-- Security runbook and incident checklist: `docs/SECURITY-RUNBOOK.md`
-- Technical debt register: `docs/TECH-DEBT.md`
-- Delivery roadmap: `docs/ROADMAP.md`
-- 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
-- Single entrypoint deployment (dynamic/static IP): `docs/DEPLOYMENT-SINGLE-ENTRYPOINT.md`
-- Isolated contour (WireGuard + multi-gateway): `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
-- SDD-13 (isolated WG + HA entrypoint + S3 baseline): `docs/SDD-13-isolated-network-single-entrypoint-and-s3.md`
-- SDD-13 plan: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.plan.md`
-- SDD-13 tasks: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.tasks.md`
-- SDD-14 (Master API control plane): `docs/SDD-14-master-api-control-plane.md`
-- SDD-14 plan: `docs/SDD-14-master-api-control-plane.plan.md`
-- SDD-14 tasks: `docs/SDD-14-master-api-control-plane.tasks.md`
+- Latest smoke evidence: `docs/SMOKE-SECURE-SYSTEMD-3VPS-2026-02-15.md`
+- Master API smoke: `docs/SMOKE-MASTER-API-3VPS-2026-02-15.md`
+- Secure deploy (3 nodes): `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
+- Isolated WG + HA entrypoint: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
 - Deploy scripts: `deploy/README.md`
-
-### Near-Term Plan
-1. Node identity and signed event append.
-2. P2P peer discovery and state sync.
-3. Basic issue commands: create, transition, comment.
-4. CLI board rendering from replicated state.
-5. Raft-protected transition validation.
 
 
 
