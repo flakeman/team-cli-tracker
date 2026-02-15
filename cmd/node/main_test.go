@@ -835,6 +835,74 @@ func TestSecurityAuditExportEndpoint(t *testing.T) {
 	}
 }
 
+func TestMasterAuditClusterExportAggregatesLocalAndPeers(t *testing.T) {
+	dataDir := t.TempDir()
+	am, err := audit.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open audit: %v", err)
+	}
+	am.Append("local.event", "u-local", "ok", nil)
+
+	peerA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/security/audit/export" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events": []audit.Event{
+				{EventID: "ae-a1", Time: "2026-02-15T10:00:00Z", Type: "peer.a", Actor: "u-a", Status: "ok", Hash: "h-a1"},
+			},
+			"next_cursor": "",
+			"count":       1,
+		})
+	}))
+	defer peerA.Close()
+
+	peerB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/security/audit/export" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events": []audit.Event{
+				{EventID: "ae-b1", Time: "2026-02-15T10:00:01Z", Type: "peer.b", Actor: "u-b", Status: "ok", Hash: "h-b1"},
+			},
+			"next_cursor": "",
+			"count":       1,
+		})
+	}))
+	defer peerB.Close()
+
+	s := &syncServer{
+		nodeID:       "srv1",
+		peers:        []string{peerA.URL, peerB.URL},
+		auditManager: am,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/master/audit/cluster-export?limit=100&include_self=true", nil)
+	w := httptest.NewRecorder()
+	s.masterAuditClusterExport(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Events []clusterAuditRecord `json:"events"`
+		Count  int                  `json:"count"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Count < 3 || len(out.Events) < 3 {
+		t.Fatalf("unexpected count=%d len=%d body=%s", out.Count, len(out.Events), w.Body.String())
+	}
+	seen := map[string]bool{}
+	for _, ev := range out.Events {
+		seen[ev.Event.Type] = true
+	}
+	if !seen["local.event"] || !seen["peer.a"] || !seen["peer.b"] {
+		t.Fatalf("missing expected event types: %+v", seen)
+	}
+}
+
 func TestChaosPartitionRejoinDeterministicConvergence(t *testing.T) {
 	base := t.TempDir()
 	_, srvA, cleanupA := newSyncServerForTest(t, filepath.Join(base, "a"), "node-a", "OPS")

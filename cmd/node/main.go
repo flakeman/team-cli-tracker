@@ -1492,6 +1492,7 @@ func runServe(args []string) {
 	register("/master/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
 	register("/master/auth/bind-role", s.withAuthRoles(s.withMasterIdempotency(s.authBindRole), "admin"))
 	register("/master/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
+	register("/master/audit/cluster-export", s.withAuthRoles(s.masterAuditClusterExport, "admin", "lead"))
 	register("/master/health", s.withAuthRoles(s.masterHealth, "admin", "lead"))
 	register("/master/capabilities", s.withAuthRoles(s.masterCapabilities, "admin", "lead"))
 
@@ -2837,6 +2838,141 @@ func (s *syncServer) securityAuditExport(w http.ResponseWriter, r *http.Request)
 		"events":      paged,
 		"next_cursor": next,
 		"count":       len(paged),
+	})
+}
+
+func (s *syncServer) masterAuditClusterExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	from := strings.TrimSpace(r.URL.Query().Get("from"))
+	to := strings.TrimSpace(r.URL.Query().Get("to"))
+	user := strings.TrimSpace(r.URL.Query().Get("user"))
+	fromTS, toTS, err := parseAuditTimeRange(from, to)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	users := parseUserFilter(user)
+	limit := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 0 || v > 10000 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
+			return
+		}
+		limit = v
+	}
+	peerLimit := 1000
+	if raw := strings.TrimSpace(r.URL.Query().Get("peer_limit")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v <= 0 || v > 5000 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer_limit"})
+			return
+		}
+		peerLimit = v
+	}
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	peerToken := strings.TrimSpace(r.URL.Query().Get("peer_token"))
+	insecureTLS := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("insecure_tls")), "true")
+	includeSelf := true
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_self")); raw != "" {
+		includeSelf = !strings.EqualFold(raw, "false")
+	}
+	peers := s.peers
+	if raw := strings.TrimSpace(r.URL.Query().Get("peers")); raw != "" {
+		peers = parsePeers(raw)
+	}
+
+	merged := make([]clusterAuditRecord, 0, 64)
+	if includeSelf {
+		localEvents, err := s.auditManager.ReadAll()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		localEvents = filterAuditEvents(localEvents, fromTS, toTS, users)
+		for _, ev := range localEvents {
+			merged = append(merged, clusterAuditRecord{NodeID: s.nodeID, Event: ev})
+		}
+	}
+
+	if len(peers) > 0 {
+		client := &http.Client{Timeout: 10 * time.Second}
+		if insecureTLS {
+			client.Transport = &http.Transport{
+				TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}, //nolint:gosec
+			}
+		}
+		type peerError struct {
+			Peer  string `json:"peer"`
+			Error string `json:"error"`
+		}
+		peerErrors := make([]peerError, 0)
+		for _, peer := range peers {
+			p := strings.TrimSpace(peer)
+			if p == "" {
+				continue
+			}
+			evs, err := fetchPeerAuditEvents(client, p, peerToken, from, to, user, peerLimit)
+			if err != nil {
+				peerErrors = append(peerErrors, peerError{Peer: p, Error: err.Error()})
+				continue
+			}
+			nodeID := nodeIDFromPeerURL(p)
+			for _, ev := range evs {
+				merged = append(merged, clusterAuditRecord{NodeID: nodeID, Event: ev})
+			}
+		}
+		merged = normalizeSortDedupClusterAuditRecords(merged)
+		paged, next, err := paginateClusterAuditRecords(merged, limit, cursor)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.auditManager.Append("audit.cluster_export_api", s.actorFromReq(r), "ok", map[string]any{
+			"peers":        len(peers),
+			"errors":       len(peerErrors),
+			"from":         from,
+			"to":           to,
+			"user":         user,
+			"limit":        limit,
+			"cursor":       cursor,
+			"next_cursor":  next,
+			"include_self": includeSelf,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events":      paged,
+			"next_cursor": next,
+			"count":       len(paged),
+			"peer_errors": peerErrors,
+		})
+		return
+	}
+
+	merged = normalizeSortDedupClusterAuditRecords(merged)
+	paged, next, err := paginateClusterAuditRecords(merged, limit, cursor)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.auditManager.Append("audit.cluster_export_api", s.actorFromReq(r), "ok", map[string]any{
+		"peers":        0,
+		"errors":       0,
+		"from":         from,
+		"to":           to,
+		"user":         user,
+		"limit":        limit,
+		"cursor":       cursor,
+		"next_cursor":  next,
+		"include_self": includeSelf,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"events":      paged,
+		"next_cursor": next,
+		"count":       len(paged),
+		"peer_errors": []any{},
 	})
 }
 

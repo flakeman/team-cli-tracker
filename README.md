@@ -399,6 +399,7 @@ go run ./cmd/node audit verify-integrity
 
 # audit export API (admin/lead token)
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/export?from=2026-02-12T00:00:00Z&to=2026-02-12T23:59:59Z&user=vova,qa&limit=100&cursor=0"
+curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
 ```
 
 ### Docs
