@@ -61,6 +61,38 @@ go run ./cmd/node
 - Задачи хранятся как события в append-only event log (`data-dir`), а не как отдельные JSON-файлы.
 - S3/MinIO используется для бинарных вложений; в event log хранятся метаданные и хеши вложений.
 
+#### Пример проекции карточки с вложением (S3-backed)
+```json
+{
+  "id": "OPS-104",
+  "summary": "Fix timeout in billing worker",
+  "status": "in_progress",
+  "attachments": [
+    {
+      "id": "OPS-104-1739465000000000000",
+      "filename": "trace.log",
+      "storage_backend": "s3",
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
+    }
+  ]
+}
+```
+Минимальный flow загрузки файла:
+```bash
+# 1) получить upload_url + attachment_id
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-104","filename":"trace.log","content_type":"text/plain","size_bytes":1234}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/initiate"
+
+# 2) загрузить байты в upload_url (S3/MinIO)
+curl -X PUT --data-binary @./trace.log "<upload_url>"
+
+# 3) зафиксировать вложение в event log
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-104","attachment_id":"<attachment_id>","filename":"trace.log","content_type":"text/plain","checksum_sha256":"<sha256>"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
+```
+
 #### Пример отображения доски (терминал)
 ```text
 Project: OPS  Revision: 7
@@ -347,6 +379,23 @@ go run ./cmd/node
 Data source:
 - Tasks are derived from append-only event log entries (`data-dir`), not stored as standalone JSON files.
 - S3/MinIO stores attachment binaries; event log stores attachment metadata and checksums.
+
+#### Example Task Projection With Attachment (S3-backed)
+```json
+{
+  "id": "OPS-104",
+  "summary": "Fix timeout in billing worker",
+  "status": "in_progress",
+  "attachments": [
+    {
+      "id": "OPS-104-1739465000000000000",
+      "filename": "trace.log",
+      "storage_backend": "s3",
+      "checksum_sha256": "9f86d081884c7d659a2feaa0c55ad015..."
+    }
+  ]
+}
+```
 
 #### Example Board View (Terminal)
 ```text
