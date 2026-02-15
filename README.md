@@ -252,6 +252,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - Runbook Ubuntu 24 + 3 VPS + real users: `docs/DEPLOYMENT-UBUNTU24-3VPS-REAL-USERS.md`
 - Единая точка входа (dynamic/static IP scenarios): `docs/DEPLOYMENT-SINGLE-ENTRYPOINT.md`
 - Изолированный контур: WireGuard + multi-gateway + board.internal: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
+- SDD-13 (isolated WG + single entrypoint HA + S3 baseline): `docs/SDD-13-isolated-network-single-entrypoint-and-s3.md`
+- SDD-13 plan: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.plan.md`
+- SDD-13 tasks: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.tasks.md`
 - Скрипты деплоя: `deploy/README.md`
 
 ### Ближайший план
@@ -424,6 +427,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - 3-node deploy guide: `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Single entrypoint deployment (dynamic/static IP): `docs/DEPLOYMENT-SINGLE-ENTRYPOINT.md`
 - Isolated contour (WireGuard + multi-gateway): `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
+- SDD-13 (isolated WG + HA entrypoint + S3 baseline): `docs/SDD-13-isolated-network-single-entrypoint-and-s3.md`
+- SDD-13 plan: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.plan.md`
+- SDD-13 tasks: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.tasks.md`
 - Deploy scripts: `deploy/README.md`
 
 ### Near-Term Plan
