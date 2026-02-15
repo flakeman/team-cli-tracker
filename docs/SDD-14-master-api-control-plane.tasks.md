@@ -9,4 +9,4 @@
 - [x] T14-007 Add master cluster control endpoints.
 - [x] T14-008 Add idempotency contract for master mutating operations.
 - [x] T14-009 Add master endpoint coverage to smoke tests on 3 nodes.
-- [ ] T14-010 Mark release checklist master control-plane gate as GO.
+- [x] T14-010 Mark release checklist master control-plane gate as GO.

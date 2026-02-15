@@ -42,6 +42,7 @@ Owner: vova
 ## 6) Functional E2E
 - [x] 30-40 issues scenario executed. (40 issues bulk run completed on 2026-02-15)
 - [x] All core commands tested: create, move, comment, archive/unarchive, board modes.
+- [x] Master control-plane smoke passed (`/master/health`, `/master/cluster/health`, mutating idempotency). (3-node smoke on 2026-02-15)
 - [x] Role-deny checks pass (`viewer` mutating actions denied).
 - [x] Cross-node consistency confirmed (same board/attachments on all 3 nodes).
 - [x] Churn test passed (restart one node, then re-sync).
