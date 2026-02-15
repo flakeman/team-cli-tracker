@@ -1,65 +1,65 @@
-# Deployment: Ubuntu 24, 3 VPS, Real Users
+﻿# Deployment: Ubuntu 24, 3 VPS, Real Users
 
 ## RU
 
-Этот runbook описывает production-like развёртывание `team-cli-tracker` на 3 VPS и подключение реальных пользователей через issuer/policy.
+Р­С‚РѕС‚ runbook РѕРїРёСЃС‹РІР°РµС‚ production-like СЂР°Р·РІС‘СЂС‚С‹РІР°РЅРёРµ `team-cli-tracker` РЅР° 3 VPS Рё РїРѕРґРєР»СЋС‡РµРЅРёРµ СЂРµР°Р»СЊРЅС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№ С‡РµСЂРµР· issuer/policy.
 
-## 0) Термины
-- VPS/Node: серверный узел кластера (в вашем случае 3).
-- Real user: человек с отдельным `user_id`, ролью и token.
-- Simulated actor: технический актор в тесте (не реальный человек).
+## 0) РўРµСЂРјРёРЅС‹
+- VPS/Node: СЃРµСЂРІРµСЂРЅС‹Р№ СѓР·РµР» РєР»Р°СЃС‚РµСЂР° (РІ РІР°С€РµРј СЃР»СѓС‡Р°Рµ 3).
+- Real user: С‡РµР»РѕРІРµРє СЃ РѕС‚РґРµР»СЊРЅС‹Рј `user_id`, СЂРѕР»СЊСЋ Рё token.
+- Simulated actor: С‚РµС…РЅРёС‡РµСЃРєРёР№ Р°РєС‚РѕСЂ РІ С‚РµСЃС‚Рµ (РЅРµ СЂРµР°Р»СЊРЅС‹Р№ С‡РµР»РѕРІРµРє).
 
-Количество VPS не ограничивает количество пользователей.
+РљРѕР»РёС‡РµСЃС‚РІРѕ VPS РЅРµ РѕРіСЂР°РЅРёС‡РёРІР°РµС‚ РєРѕР»РёС‡РµСЃС‚РІРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№.
 
-## 1) Предпосылки
-- Ubuntu 24 на 3 VPS.
+## 1) РџСЂРµРґРїРѕСЃС‹Р»РєРё
+- Ubuntu 24 РЅР° 3 VPS.
 - SSH endpoints:
-  - `srv1-22221 = srv1.abuztech.ru` (SSH port `22`)
-  - `srv2-22222 = srv2.abuztech.ru` (SSH port `22`)
-  - `srv3-22223 = srv3.abuztech.ru` (SSH port `22`)
-- Открыты сетевые порты для node API/peer communication.
-- Работает issuer/policy endpoint для authn/authz.
-- Локальная машина с Go для сборки бинарника.
+  - `srv1-22221 = srv1.example.internal` (SSH port `22`)
+  - `srv2-22222 = srv2.example.internal` (SSH port `22`)
+  - `srv3-22223 = srv3.example.internal` (SSH port `22`)
+- РћС‚РєСЂС‹С‚С‹ СЃРµС‚РµРІС‹Рµ РїРѕСЂС‚С‹ РґР»СЏ node API/peer communication.
+- Р Р°Р±РѕС‚Р°РµС‚ issuer/policy endpoint РґР»СЏ authn/authz.
+- Р›РѕРєР°Р»СЊРЅР°СЏ РјР°С€РёРЅР° СЃ Go РґР»СЏ СЃР±РѕСЂРєРё Р±РёРЅР°СЂРЅРёРєР°.
 
-## 2) Сборка бинарника (локально)
+## 2) РЎР±РѕСЂРєР° Р±РёРЅР°СЂРЅРёРєР° (Р»РѕРєР°Р»СЊРЅРѕ)
 ```bash
 cd team-cli-tracker
 go test ./...
 GOOS=linux GOARCH=amd64 go build -o node ./cmd/node
 ```
 
-## 3) Доставка бинарника на все VPS
-Пример для текущих хостов:
+## 3) Р”РѕСЃС‚Р°РІРєР° Р±РёРЅР°СЂРЅРёРєР° РЅР° РІСЃРµ VPS
+РџСЂРёРјРµСЂ РґР»СЏ С‚РµРєСѓС‰РёС… С…РѕСЃС‚РѕРІ:
 ```bash
-scp ./node vova@srv1.abuztech.ru:/home/vova/tct/node
-scp ./node vova@srv2.abuztech.ru:/home/vova/tct/node
-scp ./node vova@srv3.abuztech.ru:/home/vova/tct/node
+scp ./node vova@srv1.example.internal:/home/vova/tct/node
+scp ./node vova@srv2.example.internal:/home/vova/tct/node
+scp ./node vova@srv3.example.internal:/home/vova/tct/node
 ```
 
-На каждом VPS:
+РќР° РєР°Р¶РґРѕРј VPS:
 ```bash
 chmod +x ~/tct/node
 mkdir -p ~/tct/data ~/tct/log
 ```
 
-## 4) Быстрый запуск в screen (операционный smoke)
-На каждом VPS:
+## 4) Р‘С‹СЃС‚СЂС‹Р№ Р·Р°РїСѓСЃРє РІ screen (РѕРїРµСЂР°С†РёРѕРЅРЅС‹Р№ smoke)
+РќР° РєР°Р¶РґРѕРј VPS:
 ```bash
 screen -S tct_node -dm bash -lc '~/tct/node serve --project-id OPS --listen :4101 --data-dir ~/tct/data --secure-mode-required=true >> ~/tct/log/node.log 2>&1'
 screen -ls
 ```
 
-Проверка:
+РџСЂРѕРІРµСЂРєР°:
 ```bash
 tail -n 50 ~/tct/log/node.log
 ```
 
-Остановить:
+РћСЃС‚Р°РЅРѕРІРёС‚СЊ:
 ```bash
 screen -S tct_node -X quit
 ```
 
-## 5) Устойчивый запуск через systemd (рекомендуется)
+## 5) РЈСЃС‚РѕР№С‡РёРІС‹Р№ Р·Р°РїСѓСЃРє С‡РµСЂРµР· systemd (СЂРµРєРѕРјРµРЅРґСѓРµС‚СЃСЏ)
 `/etc/systemd/system/team-cli-tracker.service`:
 ```ini
 [Unit]
@@ -79,7 +79,7 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 ```
 
-Применить:
+РџСЂРёРјРµРЅРёС‚СЊ:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable team-cli-tracker
@@ -87,26 +87,26 @@ sudo systemctl restart team-cli-tracker
 sudo systemctl status team-cli-tracker --no-pager
 ```
 
-Логи:
+Р›РѕРіРё:
 ```bash
 journalctl -u team-cli-tracker -f
 ```
 
-## 6) Онбординг реальных пользователей
-Для каждого человека:
-1. Создать identity в issuer (`user_id`).
-2. Назначить роль (`admin`, `lead`, `dev`, `qa`, `viewer`).
-3. Выпустить token с ограниченным TTL.
-4. Передать token безопасно (секрет-хранилище, не chat/shell history).
+## 6) РћРЅР±РѕСЂРґРёРЅРі СЂРµР°Р»СЊРЅС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№
+Р”Р»СЏ РєР°Р¶РґРѕРіРѕ С‡РµР»РѕРІРµРєР°:
+1. РЎРѕР·РґР°С‚СЊ identity РІ issuer (`user_id`).
+2. РќР°Р·РЅР°С‡РёС‚СЊ СЂРѕР»СЊ (`admin`, `lead`, `dev`, `qa`, `viewer`).
+3. Р’С‹РїСѓСЃС‚РёС‚СЊ token СЃ РѕРіСЂР°РЅРёС‡РµРЅРЅС‹Рј TTL.
+4. РџРµСЂРµРґР°С‚СЊ token Р±РµР·РѕРїР°СЃРЅРѕ (СЃРµРєСЂРµС‚-С…СЂР°РЅРёР»РёС‰Рµ, РЅРµ chat/shell history).
 
-Рекомендуемая минимальная матрица:
+Р РµРєРѕРјРµРЅРґСѓРµРјР°СЏ РјРёРЅРёРјР°Р»СЊРЅР°СЏ РјР°С‚СЂРёС†Р°:
 - `admin1` -> `admin`
 - `lead1` -> `lead`
 - `dev1` -> `dev`
 - `qa1` -> `qa`
 - `viewer1` -> `viewer`
 
-## 7) Подключение реального пользователя к доске
+## 7) РџРѕРґРєР»СЋС‡РµРЅРёРµ СЂРµР°Р»СЊРЅРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ Рє РґРѕСЃРєРµ
 Live mode:
 ```bash
 team-cli-tracker board watch \
@@ -128,7 +128,7 @@ team-cli-tracker board watch \
   --interactive-refresh 2s
 ```
 
-Команды внутри interactive:
+РљРѕРјР°РЅРґС‹ РІРЅСѓС‚СЂРё interactive:
 - `help`
 - `create`
 - `move`
@@ -140,33 +140,34 @@ team-cli-tracker board watch \
 - `resume`
 - `quit`
 
-## 8) Проверка прав (allow/deny)
-Позитивные кейсы:
-- `lead/dev` могут создавать и двигать задачи в пределах policy.
-- `qa` может переводить задачи по разрешённым переходам.
+## 8) РџСЂРѕРІРµСЂРєР° РїСЂР°РІ (allow/deny)
+РџРѕР·РёС‚РёРІРЅС‹Рµ РєРµР№СЃС‹:
+- `lead/dev` РјРѕРіСѓС‚ СЃРѕР·РґР°РІР°С‚СЊ Рё РґРІРёРіР°С‚СЊ Р·Р°РґР°С‡Рё РІ РїСЂРµРґРµР»Р°С… policy.
+- `qa` РјРѕР¶РµС‚ РїРµСЂРµРІРѕРґРёС‚СЊ Р·Р°РґР°С‡Рё РїРѕ СЂР°Р·СЂРµС€С‘РЅРЅС‹Рј РїРµСЂРµС…РѕРґР°Рј.
 
-Негативные кейсы:
-- `viewer` не может `create/move/comment`.
-- Пользователь без роли не может мутировать данные.
+РќРµРіР°С‚РёРІРЅС‹Рµ РєРµР№СЃС‹:
+- `viewer` РЅРµ РјРѕР¶РµС‚ `create/move/comment`.
+- РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ Р±РµР· СЂРѕР»Рё РЅРµ РјРѕР¶РµС‚ РјСѓС‚РёСЂРѕРІР°С‚СЊ РґР°РЅРЅС‹Рµ.
 
-## 9) Аудит-доказательство реальных пользователей
-После теста:
+## 9) РђСѓРґРёС‚-РґРѕРєР°Р·Р°С‚РµР»СЊСЃС‚РІРѕ СЂРµР°Р»СЊРЅС‹С… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№
+РџРѕСЃР»Рµ С‚РµСЃС‚Р°:
 ```bash
 team-cli-tracker audit export --all --format jsonl
 team-cli-tracker audit export --from 2026-02-13T00:00:00Z --to 2026-02-13T23:59:59Z --user admin1,lead1,dev1,qa1,viewer1 --format csv
 team-cli-tracker audit verify-integrity
 ```
 
-Критерий:
-- В экспорте видны действия с реальными `user_id`.
-- Нет ложных "успешных" мутаций у запрещённых ролей.
-- Integrity check проходит.
+РљСЂРёС‚РµСЂРёР№:
+- Р’ СЌРєСЃРїРѕСЂС‚Рµ РІРёРґРЅС‹ РґРµР№СЃС‚РІРёСЏ СЃ СЂРµР°Р»СЊРЅС‹РјРё `user_id`.
+- РќРµС‚ Р»РѕР¶РЅС‹С… "СѓСЃРїРµС€РЅС‹С…" РјСѓС‚Р°С†РёР№ Сѓ Р·Р°РїСЂРµС‰С‘РЅРЅС‹С… СЂРѕР»РµР№.
+- Integrity check РїСЂРѕС…РѕРґРёС‚.
 
-## 10) Операционный чеклист
-- `secure-mode-required=true` в production.
-- UTC на всех VPS.
-- Ротация токенов и секретов.
-- Регулярный экспорт аудита.
-- В smoke-отчёте всегда разделять:
+## 10) РћРїРµСЂР°С†РёРѕРЅРЅС‹Р№ С‡РµРєР»РёСЃС‚
+- `secure-mode-required=true` РІ production.
+- UTC РЅР° РІСЃРµС… VPS.
+- Р РѕС‚Р°С†РёСЏ С‚РѕРєРµРЅРѕРІ Рё СЃРµРєСЂРµС‚РѕРІ.
+- Р РµРіСѓР»СЏСЂРЅС‹Р№ СЌРєСЃРїРѕСЂС‚ Р°СѓРґРёС‚Р°.
+- Р’ smoke-РѕС‚С‡С‘С‚Рµ РІСЃРµРіРґР° СЂР°Р·РґРµР»СЏС‚СЊ:
   - simulated actors,
   - real users (token-based).
+

@@ -1,4 +1,4 @@
-# Smoke Report: Attachments + Webhooks (3 VPS, main)
+﻿# Smoke Report: Attachments + Webhooks (3 VPS, main)
 
 - Date: 2026-02-13
 - Scope:
@@ -9,9 +9,9 @@
 
 ## Preconditions
 - 3-node cluster topology is active:
-  - `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
-  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - `srv1.example.internal (SSH port 22)` (`srv1-22221`)
+  - `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - `srv3.example.internal (SSH port 22)` (`srv3-22223`)
   for project `OPS`.
 - Secure auth token used for protected API routes.
 - Attachment backend tested in both modes:
@@ -42,3 +42,4 @@
 - API examples and operator commands are documented in `README.md`.
 - Feature implementation and tests are on `main`:
   - `f909b43`, `aad6c09`, `84d6384`, `1365c4a`, and subsequent webhook commit.
+

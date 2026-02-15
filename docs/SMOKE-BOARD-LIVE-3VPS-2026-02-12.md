@@ -1,13 +1,13 @@
-# Board Live Smoke Report (`main`) - 2026-02-12 UTC
+﻿# Board Live Smoke Report (`main`) - 2026-02-12 UTC
 
 ## Scope
 Validate active board updates in live mode (`node board --refresh 1s`) on 3 VPS.
 
 ## Environment
 - Nodes:
-  - `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
-  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - `srv1.example.internal (SSH port 22)` (`srv1-22221`)
+  - `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - `srv3.example.internal (SSH port 22)` (`srv3-22223`)
 - OS: Ubuntu 24
 - Build: `main` commit `8fd7613` (`linux/amd64`)
 
@@ -43,3 +43,4 @@ Observed canonical table lines:
 
 ## Result
 `PASS` on all 3 VPS. Live board reflects added/moved task state during active refresh without manual re-run.
+

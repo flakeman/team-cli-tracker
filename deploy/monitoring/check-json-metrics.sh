@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
-TARGETS_CSV="${1:-srv1.abuztech.ru:4101,srv2.abuztech.ru:4101,srv3.abuztech.ru:4101}"
+TARGETS_CSV="${1:-srv1.example.internal:4101,srv2.example.internal:4101,srv3.example.internal:4101}"
 IFS=',' read -r -a TARGETS <<< "${TARGETS_CSV}"
 
 has_err=0
@@ -41,4 +41,5 @@ for t in "${TARGETS[@]}"; do
 done
 
 exit "${has_err}"
+
 

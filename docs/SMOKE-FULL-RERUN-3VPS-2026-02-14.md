@@ -1,4 +1,4 @@
-# Smoke Re-Run Report: Full Matrix + Multi-User + Files (2026-02-14 UTC)
+﻿# Smoke Re-Run Report: Full Matrix + Multi-User + Files (2026-02-14 UTC)
 
 ## Goal
 Repeat full end-to-end validation from scratch:
@@ -10,10 +10,10 @@ Repeat full end-to-end validation from scratch:
 - cross-node observer checks.
 
 ## Execution Topology
-- Primary execution node: `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`) (fresh binary + fresh data-dir)
+- Primary execution node: `srv1.example.internal (SSH port 22)` (`srv1-22221`) (fresh binary + fresh data-dir)
 - Observer nodes:
-  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - `srv3.example.internal (SSH port 22)` (`srv3-22223`)
 - API test port on primary: `:4111`
 
 ## Matrix Result (Primary Node)
@@ -52,11 +52,12 @@ All checks passed with expected status codes.
 Conclusion (primary): `PASS`.
 
 ## Observer Nodes Check
-From `srv2-22222` and `srv3-22223` to `http://srv1.abuztech.ru:4111`:
+From `srv2-22222` and `srv3-22223` to `http://srv1.example.internal:4111`:
 - `curl /healthz` -> `000` + `connection refused`
-- `board --peers http://srv1.abuztech.ru:4111` -> sync clock error + empty board
+- `board --peers http://srv1.example.internal:4111` -> sync clock error + empty board
 
 Conclusion (cross-node): `BLOCKED` by inter-node network reachability on `4111/tcp`.
 
 ## Required Infra Fix
 Open `4111/tcp` between all three nodes (both directions), then re-run observer section.
+

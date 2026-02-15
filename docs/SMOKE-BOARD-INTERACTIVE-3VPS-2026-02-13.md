@@ -1,13 +1,13 @@
-# Interactive Board Smoke Report (`main`) - 2026-02-13 UTC
+﻿# Interactive Board Smoke Report (`main`) - 2026-02-13 UTC
 
 ## Scope
 Validate interactive board operator flow (`node board --interactive`) on 3 VPS.
 
 ## Environment
 - Nodes:
-  - `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
-  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - `srv1.example.internal (SSH port 22)` (`srv1-22221`)
+  - `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - `srv3.example.internal (SSH port 22)` (`srv3-22223`)
 - OS: Ubuntu 24
 - Binary: current `main` linux/amd64 build with interactive mode.
 
@@ -37,3 +37,4 @@ All 3 nodes passed:
 
 ## Result
 `PASS` on `srv1-22221`, `srv2-22222`, `srv3-22223`. Interactive board accepts embedded commands and updates state/status without requiring a second terminal for command execution.
+

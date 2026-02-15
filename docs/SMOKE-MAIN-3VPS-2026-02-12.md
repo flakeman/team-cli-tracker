@@ -1,10 +1,10 @@
-# Smoke Execution Report (`main`) - 2026-02-12 UTC
+﻿# Smoke Execution Report (`main`) - 2026-02-12 UTC
 
 ## Environment
 - Hosts / nodes:
-  - node-1: `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
-  - node-2: `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - node-3: `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - node-1: `srv1.example.internal (SSH port 22)` (`srv1-22221`)
+  - node-2: `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - node-3: `srv3.example.internal (SSH port 22)` (`srv3-22223`)
 - OS: Ubuntu 24
 - Binary: linux amd64 build from current `main`
 
@@ -46,3 +46,4 @@
 ## Conclusion
 - Smoke passed for baseline auth lifecycle and peer recovery behavior.
 - Follow-up recommended: emit `storage.key.policy_check` audit event even when encryption is disabled, for stricter evidence parity.
+

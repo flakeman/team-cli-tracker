@@ -1,4 +1,4 @@
-# Extended Smoke Report (`main`) - 2026-02-13 UTC
+﻿# Extended Smoke Report (`main`) - 2026-02-13 UTC
 
 ## Scope
 Run extended operational validation on 3 VPS:
@@ -8,9 +8,9 @@ Run extended operational validation on 3 VPS:
 
 ## Environment
 - Nodes:
-  - `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
-  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - `srv1.example.internal (SSH port 22)` (`srv1-22221`)
+  - `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - `srv3.example.internal (SSH port 22)` (`srv3-22223`)
 - Binary: current `main` linux/amd64 build (`./node` in `~/team-cli-live`)
 
 ## Batch Workload
@@ -60,3 +60,4 @@ Interactive board process available on `srv3-22223` in screen session:
 - `tct_board_int`
 - attach with:
   - `screen -r tct_board_int`
+

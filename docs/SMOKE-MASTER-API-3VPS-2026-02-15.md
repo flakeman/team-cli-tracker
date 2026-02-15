@@ -1,4 +1,4 @@
-# Smoke Master API (3 VPS, 2026-02-15)
+﻿# Smoke Master API (3 VPS, 2026-02-15)
 
 ## Scope
 - `master/health` on `srv1/srv2/srv3`
@@ -9,9 +9,9 @@
 ## Environment
 - project: `OPS`
 - nodes:
-  - `srv1.abuztech.ru:4101`
-  - `srv2.abuztech.ru:4101`
-  - `srv3.abuztech.ru:4101`
+  - `srv1.example.internal:4101`
+  - `srv2.example.internal:4101`
+  - `srv3.example.internal:4101`
 - auth tokens: `admin-token`, `lead-token`, `dev-token`
 
 ## Results
@@ -36,3 +36,4 @@
 - Master bootstrap/cluster endpoints are reachable on all 3 nodes.
 - Idempotency contract is active for mutating master endpoint.
 - Team mutation via master alias succeeds.
+

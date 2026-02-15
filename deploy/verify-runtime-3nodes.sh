@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 # Verifies tracker runtime on three nodes:
@@ -8,12 +8,12 @@ set -euo pipefail
 #
 # Run from a host that has SSH key access to all targets.
 # Example:
-#   bash deploy/verify-runtime-3nodes.sh vova srv1.abuztech.ru srv2.abuztech.ru srv3.abuztech.ru
+#   bash deploy/verify-runtime-3nodes.sh vova srv1.example.internal srv2.example.internal srv3.example.internal
 
 SSH_USER="${1:-vova}"
-N1="${2:-srv1.abuztech.ru}"
-N2="${3:-srv2.abuztech.ru}"
-N3="${4:-srv3.abuztech.ru}"
+N1="${2:-srv1.example.internal}"
+N2="${3:-srv2.example.internal}"
+N3="${4:-srv3.example.internal}"
 SERVICE_NAME="${SERVICE_NAME:-team-cli-tracker}"
 
 check_node() {
@@ -31,3 +31,4 @@ check_node "${N1}"
 check_node "${N2}"
 check_node "${N3}"
 echo "runtime verification passed on all nodes"
+

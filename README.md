@@ -32,9 +32,9 @@ Keywords: kanban, task-tracker, self-hosted, distributed, raft, cli, golang, wir
 - Следующая веха: первый синхронизируемый кластер из 3 нод.
 
 ### SSH Topology (3 VPS)
-- `srv1-22221 = srv1.abuztech.ru` (SSH port `22`)
-- `srv2-22222 = srv2.abuztech.ru` (SSH port `22`)
-- `srv3-22223 = srv3.abuztech.ru` (SSH port `22`)
+- `srv1-22221 = srv1.example.internal` (SSH port `22`)
+- `srv2-22222 = srv2.example.internal` (SSH port `22`)
+- `srv3-22223 = srv3.example.internal` (SSH port `22`)
 
 ### Быстрый старт (локально)
 ```bash
@@ -138,7 +138,7 @@ go run ./cmd/node trust revoke --node-id node-2
 # аудит: выгрузка и проверка целостности
 go run ./cmd/node audit export --all --format jsonl
 go run ./cmd/node audit export --from 2026-02-12T00:00:00Z --to 2026-02-12T23:59:59Z --user vova,qa --format csv --limit 100 --cursor 0
-go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101 --auth-token admin-token --all --format csv --limit 200 --insecure-tls
+go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.example.internal:4101,https://srv3.example.internal:4101 --auth-token admin-token --all --format csv --limit 200 --insecure-tls
 go run ./cmd/node audit verify-integrity
 
 # API выгрузка аудита (admin/lead token)
@@ -159,7 +159,7 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 # важно: mutating master endpoints (/api/v1/master/*) требуют X-Request-Id для идемпотентности
 # audit хранится локально на каждой ноде (security_audit.jsonl); единая картина по кластеру:
 curl -k -H "Authorization: Bearer <token>" \
-  "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
+  "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.example.internal:4101,https://srv3.example.internal:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
 
 # Attachments (MVP)
 # A) quick link-mode: add/list/open/remove
@@ -418,12 +418,12 @@ go run ./cmd/node trust revoke --node-id node-2
 # audit export and integrity
 go run ./cmd/node audit export --all --format jsonl
 go run ./cmd/node audit export --from 2026-02-12T00:00:00Z --to 2026-02-12T23:59:59Z --user vova,qa --format csv --limit 100 --cursor 0
-go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101 --auth-token admin-token --all --format csv --limit 200 --insecure-tls
+go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.example.internal:4101,https://srv3.example.internal:4101 --auth-token admin-token --all --format csv --limit 200 --insecure-tls
 go run ./cmd/node audit verify-integrity
 
 # audit export API (admin/lead token)
 curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/export?from=2026-02-12T00:00:00Z&to=2026-02-12T23:59:59Z&user=vova,qa&limit=100&cursor=0"
-curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
+curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master/audit/cluster-export?peers=https://srv2.example.internal:4101,https://srv3.example.internal:4101&peer_token=admin-token&insecure_tls=true&include_self=true&limit=200"
 
 # note:
 # - security_audit.jsonl is local per node;
@@ -431,7 +431,7 @@ curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master
 # - mutating master endpoints require X-Request-Id.
 ```
 
-### abuztech.ru Hub
+### Project Hub
 - Quick docs index: `docs/INDEX.md`
 - Architecture + SDD stream: `docs/SDD-01-decentralized-kanban.md`
 - Roadmap: `docs/ROADMAP.md`
@@ -441,6 +441,7 @@ curl -k -H "Authorization: Bearer <token>" "https://127.0.0.1:4101/api/v1/master
 - Secure deploy (3 nodes): `docs/DEPLOYMENT-DEBIAN13-3NODES.md`
 - Isolated WG + HA entrypoint: `docs/DEPLOYMENT-ISOLATED-WG-HA.md`
 - Deploy scripts: `deploy/README.md`
+
 
 
 

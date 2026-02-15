@@ -1,4 +1,4 @@
-# Smoke Report: Full Command Matrix + Multi-User + Files (2026-02-13)
+﻿# Smoke Report: Full Command Matrix + Multi-User + Files (2026-02-13)
 
 ## Scope
 - Full command/API matrix on fresh test data.
@@ -8,12 +8,12 @@
 - Board rendering checks (`once`, `counts`, `include-archived`).
 
 ## Environment
-- Main execution node: `srv1.abuztech.ru (SSH port 22)` (`srv1-22221`)
+- Main execution node: `srv1.example.internal (SSH port 22)` (`srv1-22221`)
 - Observer nodes:
-  - `srv2.abuztech.ru (SSH port 22)` (`srv2-22222`)
-  - `srv3.abuztech.ru (SSH port 22)` (`srv3-22223`)
+  - `srv2.example.internal (SSH port 22)` (`srv2-22222`)
+  - `srv3.example.internal (SSH port 22)` (`srv3-22223`)
 - Test API port: `:4111`
-- Binary: freshly built from current `main` (`node-linux-fulltest` uploaded to `srv1.abuztech.ru`).
+- Binary: freshly built from current `main` (`node-linux-fulltest` uploaded to `srv1.example.internal`).
 
 ## Main Matrix Result (srv1-22221)
 - Created issues: `12/12` (`201`)
@@ -47,8 +47,8 @@ Conclusion for `srv1-22221`: PASS.
 
 ## 3-VPS Observer Check (srv2-22222 / srv3-22223)
 - From `srv2-22222` and `srv3-22223`:
-  - direct `curl` to `http://srv1.abuztech.ru:4111/healthz` -> connection refused (`000`)
-  - board peer sync to `http://srv1.abuztech.ru:4111` -> sync clock error / empty board
+  - direct `curl` to `http://srv1.example.internal:4111/healthz` -> connection refused (`000`)
+  - board peer sync to `http://srv1.example.internal:4111` -> sync clock error / empty board
 
 Conclusion for cross-node e2e: BLOCKED by network reachability (port `4111` inaccessible from other VPS).
 
@@ -60,3 +60,4 @@ Conclusion for cross-node e2e: BLOCKED by network reachability (port `4111` inac
 1. Open/allow `4111/tcp` between all three VPS.
 2. Re-run the same matrix with peer sync enabled from `srv2-22222` and `srv3-22223`.
 3. Attach updated evidence and mark cross-node section PASS.
+
