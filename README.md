@@ -1,5 +1,7 @@
 ﻿# team-cli-tracker
 
+Keywords: kanban, task-tracker, self-hosted, distributed, raft, cli, golang, wireguard, audit-log, master-api, webhook, attachments, decentralized, p2p, devops
+
 ## RU
 
 Децентрализованный CLI Kanban-трекер для команд, работающих с разных компьютеров, включая сценарии с динамическими домашними IP.
