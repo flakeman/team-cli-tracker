@@ -1352,6 +1352,8 @@ func runServe(args []string) {
 	register("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
 	register("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
 	register("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
+	register("/master/health", s.withAuthRoles(s.masterHealth, "admin", "lead"))
+	register("/master/capabilities", s.withAuthRoles(s.masterCapabilities, "admin", "lead"))
 
 	go s.syncLoop(*tick)
 	if *attachmentVerifyInterval > 0 {
@@ -3725,6 +3727,43 @@ func (s *syncServer) metrics(w http.ResponseWriter, _ *http.Request) {
 		"attachment_verify_mismatch":  s.attachmentVerifyMismatch.Load(),
 		"attachment_verify_errors":    s.attachmentVerifyErrors.Load(),
 		"attachment_verify_scheduler_active": s.attachmentVerifySchedulerActive,
+	})
+}
+
+func (s *syncServer) masterHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     "ok",
+		"node_id":    s.nodeID,
+		"project_id": s.projectID,
+		"control_plane": map[string]any{
+			"master_api": true,
+			"version":    "v1-bootstrap",
+		},
+	})
+}
+
+func (s *syncServer) masterCapabilities(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"node_id": s.nodeID,
+		"master_api": map[string]any{
+			"version": "v1-bootstrap",
+			"namespaces": []string{
+				"issues",
+				"attachments",
+				"team",
+				"auth",
+				"trust",
+				"governance",
+				"audit",
+				"sync",
+				"webhooks",
+			},
+			"endpoints": map[string]string{
+				"health":       "/api/v1/master/health",
+				"capabilities": "/api/v1/master/capabilities",
+			},
+		},
 	})
 }
 

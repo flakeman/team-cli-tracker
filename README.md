@@ -257,6 +257,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/api/v1/webhooks/l
 - SDD-13 (isolated WG + single entrypoint HA + S3 baseline): `docs/SDD-13-isolated-network-single-entrypoint-and-s3.md`
 - SDD-13 plan: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.plan.md`
 - SDD-13 tasks: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.tasks.md`
+- SDD-14 (Master API control plane): `docs/SDD-14-master-api-control-plane.md`
+- SDD-14 plan: `docs/SDD-14-master-api-control-plane.plan.md`
+- SDD-14 tasks: `docs/SDD-14-master-api-control-plane.tasks.md`
 - Скрипты деплоя: `deploy/README.md`
 
 ### Ближайший план
@@ -434,6 +437,9 @@ curl -H "Authorization: Bearer <token>" "http://127.0.0.1:4101/security/audit/ex
 - SDD-13 (isolated WG + HA entrypoint + S3 baseline): `docs/SDD-13-isolated-network-single-entrypoint-and-s3.md`
 - SDD-13 plan: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.plan.md`
 - SDD-13 tasks: `docs/SDD-13-isolated-network-single-entrypoint-and-s3.tasks.md`
+- SDD-14 (Master API control plane): `docs/SDD-14-master-api-control-plane.md`
+- SDD-14 plan: `docs/SDD-14-master-api-control-plane.plan.md`
+- SDD-14 tasks: `docs/SDD-14-master-api-control-plane.tasks.md`
 - Deploy scripts: `deploy/README.md`
 
 ### Near-Term Plan

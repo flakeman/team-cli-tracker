@@ -1110,6 +1110,58 @@ func TestSensitiveEndpointsUseStricterRateLimit(t *testing.T) {
 	}
 }
 
+func TestMasterAPIBootstrapEndpoints(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "master"), "srv1", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"admin-token": {UserID: "admin1", Role: "admin", Active: true},
+	}
+
+	req1, err := http.NewRequest(http.MethodGet, srv.url+"/master/health", nil)
+	if err != nil {
+		t.Fatalf("new request master/health: %v", err)
+	}
+	req1.Header.Set("Authorization", "Bearer admin-token")
+	res1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("do master/health: %v", err)
+	}
+	defer res1.Body.Close()
+	if res1.StatusCode != http.StatusOK {
+		t.Fatalf("master/health status=%d want=%d", res1.StatusCode, http.StatusOK)
+	}
+	var h map[string]any
+	if err := json.NewDecoder(res1.Body).Decode(&h); err != nil {
+		t.Fatalf("decode master/health: %v", err)
+	}
+	if strings.TrimSpace(fmt.Sprint(h["status"])) != "ok" {
+		t.Fatalf("master/health unexpected status: %v", h["status"])
+	}
+
+	req2, err := http.NewRequest(http.MethodGet, srv.url+"/master/capabilities", nil)
+	if err != nil {
+		t.Fatalf("new request master/capabilities: %v", err)
+	}
+	req2.Header.Set("Authorization", "Bearer admin-token")
+	res2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("do master/capabilities: %v", err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("master/capabilities status=%d want=%d", res2.StatusCode, http.StatusOK)
+	}
+	var c map[string]any
+	if err := json.NewDecoder(res2.Body).Decode(&c); err != nil {
+		t.Fatalf("decode master/capabilities: %v", err)
+	}
+	if strings.TrimSpace(fmt.Sprint(c["status"])) != "ok" {
+		t.Fatalf("master/capabilities unexpected status: %v", c["status"])
+	}
+}
+
 func TestRateLimitKeyUsesStableClientIP(t *testing.T) {
 	s := &syncServer{}
 	req1, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
@@ -2460,6 +2512,8 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))
 	mux.HandleFunc("/auth/bind-role", s.withAuthRoles(s.authBindRole, "admin"))
 	mux.HandleFunc("/auth/list-bindings", s.withAuthRoles(s.authListBindings, "admin", "lead"))
+	mux.HandleFunc("/master/health", s.withAuthRoles(s.masterHealth, "admin", "lead"))
+	mux.HandleFunc("/master/capabilities", s.withAuthRoles(s.masterCapabilities, "admin", "lead"))
 	mux.HandleFunc("/metrics", s.metrics)
 	ts := httptest.NewServer(mux)
 	out := &testNodeServer{syncServer: s, server: ts, url: ts.URL}
