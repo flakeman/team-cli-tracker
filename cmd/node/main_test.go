@@ -719,6 +719,90 @@ func TestPaginateAuditEvents(t *testing.T) {
 	}
 }
 
+func TestNormalizeSortDedupClusterAuditRecords(t *testing.T) {
+	in := []clusterAuditRecord{
+		{NodeID: "srv2", Event: audit.Event{EventID: "ae-2", Hash: "h2", Time: "2026-02-15T10:00:02Z"}},
+		{NodeID: "srv1", Event: audit.Event{EventID: "ae-1", Hash: "h1", Time: "2026-02-15T10:00:01Z"}},
+		{NodeID: "srv1", Event: audit.Event{EventID: "ae-1", Hash: "h1", Time: "2026-02-15T10:00:01Z"}}, // duplicate
+	}
+	out := normalizeSortDedupClusterAuditRecords(in)
+	if len(out) != 2 {
+		t.Fatalf("unexpected dedup len=%d", len(out))
+	}
+	if out[0].NodeID != "srv1" || out[0].Event.EventID != "ae-1" {
+		t.Fatalf("unexpected first record: %+v", out[0])
+	}
+	if out[1].NodeID != "srv2" || out[1].Event.EventID != "ae-2" {
+		t.Fatalf("unexpected second record: %+v", out[1])
+	}
+}
+
+func TestPaginateClusterAuditRecords(t *testing.T) {
+	in := []clusterAuditRecord{
+		{NodeID: "srv1", Event: audit.Event{EventID: "ae-1"}},
+		{NodeID: "srv2", Event: audit.Event{EventID: "ae-2"}},
+		{NodeID: "srv3", Event: audit.Event{EventID: "ae-3"}},
+	}
+	page1, next, err := paginateClusterAuditRecords(in, 2, "")
+	if err != nil {
+		t.Fatalf("paginate page1: %v", err)
+	}
+	if len(page1) != 2 || next != "2" {
+		t.Fatalf("unexpected page1 len=%d next=%q", len(page1), next)
+	}
+	page2, next2, err := paginateClusterAuditRecords(in, 2, next)
+	if err != nil {
+		t.Fatalf("paginate page2: %v", err)
+	}
+	if len(page2) != 1 || next2 != "" {
+		t.Fatalf("unexpected page2 len=%d next=%q", len(page2), next2)
+	}
+}
+
+func TestFetchPeerAuditEventsPagination(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/security/audit/export" {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+		if cursor == "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"events": []audit.Event{
+					{EventID: "ae-1", Time: "2026-02-15T10:00:00Z", Type: "x", Status: "ok"},
+				},
+				"next_cursor": "1",
+				"count":       1,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events": []audit.Event{
+				{EventID: "ae-2", Time: "2026-02-15T10:00:01Z", Type: "y", Status: "ok"},
+			},
+			"next_cursor": "",
+			"count":       1,
+		})
+	}))
+	defer srv.Close()
+
+	evs, err := fetchPeerAuditEvents(http.DefaultClient, srv.URL, "admin-token", "", "", "", 1)
+	if err != nil {
+		t.Fatalf("fetch peer audit events: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("expected paginated calls, got=%d", calls)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("unexpected events len=%d", len(evs))
+	}
+	if evs[0].EventID != "ae-1" || evs[1].EventID != "ae-2" {
+		t.Fatalf("unexpected event ids: %+v", evs)
+	}
+}
+
 func TestSecurityAuditExportEndpoint(t *testing.T) {
 	dataDir := t.TempDir()
 	am, err := audit.Open(dataDir)

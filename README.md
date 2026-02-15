@@ -132,6 +132,7 @@ go run ./cmd/node trust revoke --node-id node-2
 # аудит: выгрузка и проверка целостности
 go run ./cmd/node audit export --all --format jsonl
 go run ./cmd/node audit export --from 2026-02-12T00:00:00Z --to 2026-02-12T23:59:59Z --user vova,qa --format csv --limit 100 --cursor 0
+go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101 --auth-token admin-token --all --format csv --limit 200 --insecure-tls
 go run ./cmd/node audit verify-integrity
 
 # API выгрузка аудита (admin/lead token)
@@ -393,6 +394,7 @@ go run ./cmd/node trust revoke --node-id node-2
 # audit export and integrity
 go run ./cmd/node audit export --all --format jsonl
 go run ./cmd/node audit export --from 2026-02-12T00:00:00Z --to 2026-02-12T23:59:59Z --user vova,qa --format csv --limit 100 --cursor 0
+go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.abuztech.ru:4101,https://srv3.abuztech.ru:4101 --auth-token admin-token --all --format csv --limit 200 --insecure-tls
 go run ./cmd/node audit verify-integrity
 
 # audit export API (admin/lead token)

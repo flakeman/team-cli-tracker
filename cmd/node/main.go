@@ -997,7 +997,7 @@ func runAuth(args []string) {
 
 func runAudit(args []string) {
 	if len(args) < 1 {
-		fmt.Println("audit commands: export | verify-integrity")
+		fmt.Println("audit commands: export | cluster-export | verify-integrity")
 		return
 	}
 	switch args[0] {
@@ -1079,6 +1079,121 @@ func runAudit(args []string) {
 			"cursor":      strings.TrimSpace(*cursor),
 			"next_cursor": nextCursor,
 		})
+	case "cluster-export":
+		fs := flag.NewFlagSet("audit cluster-export", flag.ExitOnError)
+		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
+		peersCSV := fs.String("peers", envOr("PEERS", ""), "comma-separated peer base URLs")
+		selfNodeID := fs.String("self-node-id", envOr("NODE_ID", "local"), "node id label for local audit source")
+		token := fs.String("auth-token", "", "bearer token for peer /security/audit/export")
+		all := fs.Bool("all", false, "export all audit records")
+		from := fs.String("from", "", "RFC3339 start time (inclusive)")
+		to := fs.String("to", "", "RFC3339 end time (inclusive)")
+		user := fs.String("user", "", "comma-separated user ids")
+		format := fs.String("format", "jsonl", "jsonl|csv")
+		limit := fs.Int("limit", 0, "output page size after merge (0 means all)")
+		cursor := fs.String("cursor", "", "output page cursor (offset)")
+		peerLimit := fs.Int("peer-limit", 1000, "peer export page size")
+		insecureTLS := fs.Bool("insecure-tls", true, "skip TLS verification for peer HTTPS requests")
+		_ = fs.Parse(args[1:])
+
+		fromTS, toTS, err := parseAuditTimeRange(*from, *to)
+		if err != nil {
+			fatal(err)
+		}
+		users := parseUserFilter(*user)
+		if !*all && fromTS == nil && toTS == nil && len(users) == 0 {
+			*all = true
+		}
+
+		am, err := audit.Open(*dataDir)
+		if err != nil {
+			fatal(err)
+		}
+		localRecords, err := am.ReadAll()
+		if err != nil {
+			fatal(err)
+		}
+		localRecords = filterAuditEvents(localRecords, fromTS, toTS, users)
+		merged := make([]clusterAuditRecord, 0, len(localRecords)+64)
+		for _, ev := range localRecords {
+			merged = append(merged, clusterAuditRecord{
+				NodeID: strings.TrimSpace(*selfNodeID),
+				Event:  ev,
+			})
+		}
+
+		peers := parsePeers(*peersCSV)
+		if len(peers) > 0 {
+			client := &http.Client{Timeout: 10 * time.Second}
+			if *insecureTLS {
+				client.Transport = &http.Transport{
+					TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}, //nolint:gosec
+				}
+			}
+			for _, peer := range peers {
+				p := strings.TrimSpace(peer)
+				if p == "" {
+					continue
+				}
+				events, err := fetchPeerAuditEvents(client, p, strings.TrimSpace(*token), strings.TrimSpace(*from), strings.TrimSpace(*to), strings.TrimSpace(*user), *peerLimit)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "peer=%s fetch error: %v\n", p, err)
+					continue
+				}
+				label := nodeIDFromPeerURL(p)
+				for _, ev := range events {
+					merged = append(merged, clusterAuditRecord{NodeID: label, Event: ev})
+				}
+			}
+		}
+
+		merged = normalizeSortDedupClusterAuditRecords(merged)
+		paged, nextCursor, err := paginateClusterAuditRecords(merged, *limit, *cursor)
+		if err != nil {
+			fatal(err)
+		}
+		switch strings.ToLower(strings.TrimSpace(*format)) {
+		case "jsonl":
+			for _, rec := range paged {
+				raw, err := json.Marshal(rec)
+				if err != nil {
+					continue
+				}
+				fmt.Println(string(raw))
+			}
+		case "csv":
+			w := csv.NewWriter(os.Stdout)
+			_ = w.Write([]string{"node_id", "time", "type", "actor", "status", "details_json", "event_id", "hash"})
+			for _, rec := range paged {
+				detailsRaw := "{}"
+				if rec.Event.Details != nil {
+					if raw, err := json.Marshal(rec.Event.Details); err == nil {
+						detailsRaw = string(raw)
+					}
+				}
+				_ = w.Write([]string{rec.NodeID, rec.Event.Time, rec.Event.Type, rec.Event.Actor, rec.Event.Status, detailsRaw, rec.Event.EventID, rec.Event.Hash})
+			}
+			w.Flush()
+			if err := w.Error(); err != nil {
+				fatal(err)
+			}
+		default:
+			fatal(fmt.Errorf("unsupported format: %s", *format))
+		}
+		if nextCursor != "" {
+			fmt.Fprintf(os.Stderr, "next_cursor=%s\n", nextCursor)
+		}
+		am.Append("audit.cluster_export", "local-cli", "ok", map[string]any{
+			"peers":       len(peers),
+			"from":        strings.TrimSpace(*from),
+			"to":          strings.TrimSpace(*to),
+			"user":        strings.TrimSpace(*user),
+			"format":      strings.ToLower(strings.TrimSpace(*format)),
+			"count":       len(paged),
+			"limit":       *limit,
+			"cursor":      strings.TrimSpace(*cursor),
+			"next_cursor": nextCursor,
+		})
 	case "verify-integrity":
 		fs := flag.NewFlagSet("audit verify-integrity", flag.ExitOnError)
 		dataDir := fs.String("data-dir", envOr("DATA_DIR", "./data"), "data directory")
@@ -1095,7 +1210,7 @@ func runAudit(args []string) {
 		am.Append("audit.verify_integrity", "local-cli", "ok", map[string]any{"checked": checked})
 		fmt.Printf("ok: audit integrity verified checked=%d\n", checked)
 	default:
-		fmt.Println("audit commands: export | verify-integrity")
+		fmt.Println("audit commands: export | cluster-export | verify-integrity")
 	}
 }
 
@@ -4827,6 +4942,7 @@ func printUsage() {
 	fmt.Println("  node auth bind-role --user-id u1 --role lead")
 	fmt.Println("  node auth list-bindings")
 	fmt.Println("  node audit export [--all] [--from RFC3339] [--to RFC3339] [--user u1,u2] [--format jsonl|csv] [--limit N --cursor K]")
+	fmt.Println("  node audit cluster-export --peers https://srv2:4101,https://srv3:4101 [--auth-token t] [--all|--from/--to/--user] [--format jsonl|csv] [--limit N --cursor K]")
 	fmt.Println("  node audit verify-integrity")
 	fmt.Println("  node team onboard --user-id u1 --role dev [--duty]")
 	fmt.Println("  node team role-change --user-id u1 --role lead [--duty]")
@@ -4921,6 +5037,140 @@ func paginateAuditEvents(in []audit.Event, limit int, cursor string) ([]audit.Ev
 		next = strconv.Itoa(end)
 	}
 	return in[offset:end], next, nil
+}
+
+type clusterAuditRecord struct {
+	NodeID string      `json:"node_id"`
+	Event  audit.Event `json:"event"`
+}
+
+type securityAuditExportResponse struct {
+	Events     []audit.Event `json:"events"`
+	NextCursor string        `json:"next_cursor"`
+}
+
+func fetchPeerAuditEvents(client *http.Client, peer, token, from, to, user string, pageLimit int) ([]audit.Event, error) {
+	base := strings.TrimRight(strings.TrimSpace(peer), "/")
+	if base == "" {
+		return nil, fmt.Errorf("empty peer url")
+	}
+	if pageLimit <= 0 {
+		pageLimit = 1000
+	}
+	out := make([]audit.Event, 0, pageLimit)
+	cursor := ""
+	for {
+		u, err := url.Parse(base + "/security/audit/export")
+		if err != nil {
+			return nil, err
+		}
+		q := u.Query()
+		if strings.TrimSpace(from) != "" {
+			q.Set("from", strings.TrimSpace(from))
+		}
+		if strings.TrimSpace(to) != "" {
+			q.Set("to", strings.TrimSpace(to))
+		}
+		if strings.TrimSpace(user) != "" {
+			q.Set("user", strings.TrimSpace(user))
+		}
+		q.Set("limit", strconv.Itoa(pageLimit))
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(token) != "" {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var payload securityAuditExportResponse
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, err
+		}
+		out = append(out, payload.Events...)
+		if strings.TrimSpace(payload.NextCursor) == "" {
+			break
+		}
+		cursor = strings.TrimSpace(payload.NextCursor)
+	}
+	return out, nil
+}
+
+func normalizeSortDedupClusterAuditRecords(in []clusterAuditRecord) []clusterAuditRecord {
+	dedup := make(map[string]clusterAuditRecord, len(in))
+	for _, rec := range in {
+		nodeID := strings.TrimSpace(rec.NodeID)
+		if nodeID == "" {
+			nodeID = "unknown"
+		}
+		rec.NodeID = nodeID
+		key := nodeID + "|" + strings.TrimSpace(rec.Event.EventID) + "|" + strings.TrimSpace(rec.Event.Hash) + "|" + strings.TrimSpace(rec.Event.Time)
+		dedup[key] = rec
+	}
+	out := make([]clusterAuditRecord, 0, len(dedup))
+	for _, rec := range dedup {
+		out = append(out, rec)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ti := strings.TrimSpace(out[i].Event.Time)
+		tj := strings.TrimSpace(out[j].Event.Time)
+		if ti != tj {
+			return ti < tj
+		}
+		if out[i].NodeID != out[j].NodeID {
+			return out[i].NodeID < out[j].NodeID
+		}
+		if out[i].Event.EventID != out[j].Event.EventID {
+			return out[i].Event.EventID < out[j].Event.EventID
+		}
+		return out[i].Event.Hash < out[j].Event.Hash
+	})
+	return out
+}
+
+func paginateClusterAuditRecords(in []clusterAuditRecord, limit int, cursor string) ([]clusterAuditRecord, string, error) {
+	offset := 0
+	v := strings.TrimSpace(cursor)
+	if v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return nil, "", fmt.Errorf("invalid --cursor value")
+		}
+		offset = n
+	}
+	if offset >= len(in) {
+		return []clusterAuditRecord{}, "", nil
+	}
+	if limit <= 0 {
+		return in[offset:], "", nil
+	}
+	end := minInt(offset+limit, len(in))
+	next := ""
+	if end < len(in) {
+		next = strconv.Itoa(end)
+	}
+	return in[offset:end], next, nil
+}
+
+func nodeIDFromPeerURL(peer string) string {
+	u, err := url.Parse(strings.TrimSpace(peer))
+	if err != nil || strings.TrimSpace(u.Hostname()) == "" {
+		return strings.TrimSpace(peer)
+	}
+	return strings.TrimSpace(u.Hostname())
 }
 
 func printIssueUsage() {
