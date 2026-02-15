@@ -106,6 +106,47 @@ Total issues: 7  Open: 5  Done: 2
 +----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
 ```
 
+#### Операторский quickstart (deploy -> users -> tasks -> files -> export)
+```bash
+# 1) Развернуть 3 ноды (на каждой ноде)
+cp deploy/cluster.node-1.env.example deploy/cluster.env   # node-2/node-3: соответствующий файл
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
+sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/team-cli-tracker/deploy/cluster.env
+cd /opt/team-cli-tracker && go build -o node ./cmd/node
+sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-tracker/deploy/cluster.env
+systemctl is-active team-cli-tracker
+
+# 2) Добавить/проверить ноды доверия (из admin ноды)
+go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
+go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
+go run ./cmd/node trust list
+
+# 3) Добавить пользователей и роли
+go run ./cmd/node team onboard --user-id lead1 --role lead
+go run ./cmd/node team onboard --user-id dev1 --role dev
+go run ./cmd/node team onboard --user-id qa1 --role qa
+go run ./cmd/node auth issue --user-id dev1 --role dev --ttl-sec 86400
+
+# 4) Создать и двигать задачи
+go run ./cmd/node issue create --project-id OPS --issue-id OPS-200 --summary "Deploy check"
+go run ./cmd/node issue transition --project-id OPS --issue-id OPS-200 --from todo --to in_progress --policy-url http://127.0.0.1:4101
+go run ./cmd/node issue comment --project-id OPS --issue-id OPS-200 --text "Started"
+
+# 5) Файлы в S3/MinIO (initiate -> upload -> complete)
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-200","filename":"trace.log","content_type":"text/plain","size_bytes":1234}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/initiate"
+curl -X PUT --data-binary @./trace.log "<upload_url>"
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-200","attachment_id":"<attachment_id>","filename":"trace.log","content_type":"text/plain","checksum_sha256":"<sha256>"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
+
+# 6) Выгрузка аудита (локальная и кластерная)
+go run ./cmd/node audit export --all --format jsonl
+go run ./cmd/node audit export --from 2026-02-15T00:00:00Z --to 2026-02-15T23:59:59Z --user admin1,dev1 --format csv
+go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.example.internal:4101,https://srv3.example.internal:4101 --auth-token admin-token --all --format csv
+```
+
 #### Примеры команд
 ```bash
 # запустить ноду
@@ -408,6 +449,47 @@ Total issues: 7  Open: 5  Done: 2
 | OPS-120 Add audit logs @unassign | OPS-104 Fix billing timeout @vla | OPS-101 Add health endpoint @lea | OPS-115 UI regression checks @qa | OPS-097 Update runbook @olga     |
 | OPS-130 Add SLA reminder hooks @ |                                  |                                  |                                  | OPS-099 DB migration cleanup @dm |
 +----------------------------------+----------------------------------+----------------------------------+----------------------------------+----------------------------------+
+```
+
+#### Operator Quickstart (deploy -> users -> tasks -> files -> export)
+```bash
+# 1) Deploy 3 nodes (run on each node)
+cp deploy/cluster.node-1.env.example deploy/cluster.env   # use node-2/node-3 template accordingly
+sudo bash deploy/bootstrap-debian13.sh deploy/cluster.env
+sudo -u teamtracker bash /opt/team-cli-tracker/deploy/gen-node-config.sh /opt/team-cli-tracker/deploy/cluster.env
+cd /opt/team-cli-tracker && go build -o node ./cmd/node
+sudo bash /opt/team-cli-tracker/deploy/install-systemd-service.sh /opt/team-cli-tracker/deploy/cluster.env
+systemctl is-active team-cli-tracker
+
+# 2) Add/check trusted nodes (from admin node)
+go run ./cmd/node trust invite --node-id node-2 --ttl-sec 3600
+go run ./cmd/node trust use-invite --node-id node-2 --token <invite-token>
+go run ./cmd/node trust list
+
+# 3) Add users and roles
+go run ./cmd/node team onboard --user-id lead1 --role lead
+go run ./cmd/node team onboard --user-id dev1 --role dev
+go run ./cmd/node team onboard --user-id qa1 --role qa
+go run ./cmd/node auth issue --user-id dev1 --role dev --ttl-sec 86400
+
+# 4) Create and move tasks
+go run ./cmd/node issue create --project-id OPS --issue-id OPS-200 --summary "Deploy check"
+go run ./cmd/node issue transition --project-id OPS --issue-id OPS-200 --from todo --to in_progress --policy-url http://127.0.0.1:4101
+go run ./cmd/node issue comment --project-id OPS --issue-id OPS-200 --text "Started"
+
+# 5) Files in S3/MinIO (initiate -> upload -> complete)
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-200","filename":"trace.log","content_type":"text/plain","size_bytes":1234}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/initiate"
+curl -X PUT --data-binary @./trace.log "<upload_url>"
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"project_id":"OPS","issue_id":"OPS-200","attachment_id":"<attachment_id>","filename":"trace.log","content_type":"text/plain","checksum_sha256":"<sha256>"}' \
+  "http://127.0.0.1:4101/api/v1/issue/attachment/complete"
+
+# 6) Audit export (local and cluster)
+go run ./cmd/node audit export --all --format jsonl
+go run ./cmd/node audit export --from 2026-02-15T00:00:00Z --to 2026-02-15T23:59:59Z --user admin1,dev1 --format csv
+go run ./cmd/node audit cluster-export --data-dir ./data --self-node-id srv1 --peers https://srv2.example.internal:4101,https://srv3.example.internal:4101 --auth-token admin-token --all --format csv
 ```
 
 #### Example Commands
