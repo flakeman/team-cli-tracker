@@ -6,7 +6,7 @@
 - [x] T14-004 Add automated tests for bootstrap endpoints.
 - [x] T14-005 Add `/api/v1/master/issues/*` parity aliases.
 - [x] T14-006 Add `/api/v1/master/team|auth|trust|governance/*` parity aliases.
-- [ ] T14-007 Add master cluster control endpoints.
+- [x] T14-007 Add master cluster control endpoints.
 - [ ] T14-008 Add idempotency contract for master mutating operations.
 - [ ] T14-009 Add master endpoint coverage to smoke tests on 3 nodes.
 - [ ] T14-010 Mark release checklist master control-plane gate as GO.

@@ -1259,6 +1259,52 @@ func TestMasterControlAliasesTeamAuthTrustGovernance(t *testing.T) {
 	}
 }
 
+func TestMasterClusterControlEndpoints(t *testing.T) {
+	base := t.TempDir()
+	_, srv, cleanup := newSyncServerForTest(t, filepath.Join(base, "master-cluster"), "srv1", "OPS")
+	defer cleanup()
+	srv.syncServer.authEnabled = true
+	srv.syncServer.authTokens = map[string]authPrincipal{
+		"lead-token": {UserID: "lead1", Role: "lead", Active: true},
+	}
+	srv.syncServer.peers = []string{"http://srv2:4101", "http://srv3:4101"}
+
+	reqHealth, _ := http.NewRequest(http.MethodGet, srv.url+"/master/cluster/health", nil)
+	reqHealth.Header.Set("Authorization", "Bearer lead-token")
+	resHealth, err := http.DefaultClient.Do(reqHealth)
+	if err != nil {
+		t.Fatalf("master/cluster/health request failed: %v", err)
+	}
+	defer resHealth.Body.Close()
+	if resHealth.StatusCode != http.StatusOK {
+		t.Fatalf("master/cluster/health status=%d want=%d", resHealth.StatusCode, http.StatusOK)
+	}
+
+	reqNodes, _ := http.NewRequest(http.MethodGet, srv.url+"/master/cluster/nodes", nil)
+	reqNodes.Header.Set("Authorization", "Bearer lead-token")
+	resNodes, err := http.DefaultClient.Do(reqNodes)
+	if err != nil {
+		t.Fatalf("master/cluster/nodes request failed: %v", err)
+	}
+	defer resNodes.Body.Close()
+	if resNodes.StatusCode != http.StatusOK {
+		t.Fatalf("master/cluster/nodes status=%d want=%d", resNodes.StatusCode, http.StatusOK)
+	}
+
+	body := []byte(`{"project_id":"OPS","voting_nodes":["srv1","srv2","srv3"]}`)
+	reqReconf, _ := http.NewRequest(http.MethodPost, srv.url+"/master/cluster/reconfigure", bytes.NewReader(body))
+	reqReconf.Header.Set("Authorization", "Bearer lead-token")
+	reqReconf.Header.Set("Content-Type", "application/json")
+	resReconf, err := http.DefaultClient.Do(reqReconf)
+	if err != nil {
+		t.Fatalf("master/cluster/reconfigure request failed: %v", err)
+	}
+	defer resReconf.Body.Close()
+	if resReconf.StatusCode != http.StatusOK {
+		t.Fatalf("master/cluster/reconfigure status=%d want=%d", resReconf.StatusCode, http.StatusOK)
+	}
+}
+
 func TestRateLimitKeyUsesStableClientIP(t *testing.T) {
 	s := &syncServer{}
 	req1, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/metrics", nil)
@@ -2615,6 +2661,9 @@ func newSyncServerForTest(t *testing.T, dataDir, nodeID, projectID string) (*sto
 	mux.HandleFunc("/master/team/role-change", s.withAuthRoles(s.teamRoleChange, "admin", "lead"))
 	mux.HandleFunc("/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
 	mux.HandleFunc("/master/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
+	mux.HandleFunc("/master/cluster/health", s.withAuthRoles(s.masterClusterHealth, "admin", "lead"))
+	mux.HandleFunc("/master/cluster/nodes", s.withAuthRoles(s.masterClusterNodes, "admin", "lead"))
+	mux.HandleFunc("/master/cluster/reconfigure", s.withAuthRoles(s.masterClusterReconfigure, "admin", "lead"))
 	mux.HandleFunc("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
 	mux.HandleFunc("/auth/revoke", s.withAuthRoles(s.authRevoke, "admin"))
 	mux.HandleFunc("/auth/list", s.withAuthRoles(s.authList, "admin", "lead"))

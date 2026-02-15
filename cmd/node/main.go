@@ -1361,6 +1361,9 @@ func runServe(args []string) {
 	register("/master/governance/node-role", s.withAuthRoles(s.governanceNodeRole, "admin", "lead"))
 	register("/master/governance/reconfigure", s.withAuthRoles(s.governanceReconfigure, "admin", "lead"))
 	register("/master/governance/list", s.withAuthRoles(s.governanceList, "admin", "lead"))
+	register("/master/cluster/health", s.withAuthRoles(s.masterClusterHealth, "admin", "lead"))
+	register("/master/cluster/nodes", s.withAuthRoles(s.masterClusterNodes, "admin", "lead"))
+	register("/master/cluster/reconfigure", s.withAuthRoles(s.masterClusterReconfigure, "admin", "lead"))
 	register("/security/audit", s.withAuthRoles(s.securityAudit, "admin", "lead"))
 	register("/security/audit/export", s.withAuthRoles(s.securityAuditExport, "admin", "lead"))
 	register("/auth/issue", s.withAuthRoles(s.authIssue, "admin"))
@@ -3786,6 +3789,36 @@ func (s *syncServer) masterCapabilities(w http.ResponseWriter, _ *http.Request) 
 			},
 		},
 	})
+}
+
+func (s *syncServer) masterClusterHealth(w http.ResponseWriter, _ *http.Request) {
+	last := atomic.LoadInt64(&s.lastSyncUnix)
+	lastSyncAt := ""
+	if last > 0 {
+		lastSyncAt = time.Unix(last, 0).UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"node_id":     s.nodeID,
+		"project_id":  s.projectID,
+		"node_role":   s.nodeRole,
+		"peer_count":  len(s.activeSyncPeers()),
+		"last_sync_at": lastSyncAt,
+	})
+}
+
+func (s *syncServer) masterClusterNodes(w http.ResponseWriter, _ *http.Request) {
+	nodes := s.govManager.List()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"node_id": s.nodeID,
+		"nodes":   nodes,
+	})
+}
+
+func (s *syncServer) masterClusterReconfigure(w http.ResponseWriter, r *http.Request) {
+	// Alias to existing governance reconfigure flow with quorum checks.
+	s.governanceReconfigure(w, r)
 }
 
 func (s *syncServer) syncLoop(interval time.Duration) {
