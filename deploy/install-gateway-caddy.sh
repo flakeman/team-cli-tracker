@@ -50,10 +50,15 @@ if [[ -z "$upstreams" ]]; then
   exit 1
 fi
 
+bind_addr="$(echo "${GATEWAY_BIND_ADDRESS:-0.0.0.0}" | xargs)"
+listen_port="$(echo "${GATEWAY_LISTEN_PORT:-8080}" | xargs)"
+
 if [[ "${GATEWAY_ENABLE_TLS:-true}" == "true" ]]; then
+  # With TLS enabled we keep domain-based site label.
+  # Binding to specific interfaces should be managed by host firewall/routing.
   site="${BOARD_DOMAIN}"
 else
-  site=":$(echo "${GATEWAY_LISTEN_PORT:-8080}" | xargs)"
+  site="${bind_addr}:${listen_port}"
 fi
 
 cat >/etc/caddy/Caddyfile <<EOF
